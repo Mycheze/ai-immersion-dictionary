@@ -9,7 +9,7 @@ class DatabaseManager:
     Manages SQLite database operations for the dictionary application
     """
     
-    def __init__(self, db_path: str = "dictionary.db"):
+    def __init__(self, db_path: str = "data/dictionary.db"):
         """Initialize database connection and create tables if needed"""
         self.db_path = db_path
         self.init_database()

@@ -1,9 +1,26 @@
-*.pyc
+# Python
 __pycache__/
+*.py[cod]
+*.class
+*.so
+venv/
+.env
+
+# Database
 *.db
+
+# Sensitive files  
 api_key.txt
 user_settings.json
-*.sh
-*.swp
-depricated/
 todo.md
+
+# IDE
+.vscode/
+.idea/
+
+# Output files
+output.json
+*.backup
+
+# Tree output
+tree_output.txt

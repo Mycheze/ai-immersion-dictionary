@@ -106,7 +106,7 @@ def format_response(content):
 def get_lemma(client, word, settings):
     """Get the lemma form of the word using the lemma prompt."""
     try:
-        lemma_prompt = read_system_prompt('lemma_prompt.txt')
+        lemma_prompt = read_system_prompt('config/lemma_prompt.txt')
         
         # Create a temporary settings dict with the word included
         lemma_settings = settings.copy()
@@ -139,7 +139,7 @@ def get_lemma(client, word, settings):
 def main():
     api_key = read_api_key('api_key.txt')
     settings = load_settings('settings.txt')
-    raw_prompt = read_system_prompt('prompt.txt')
+    raw_prompt = read_system_prompt('config/prompt.txt')
     system_prompt = process_prompt(raw_prompt, settings)
     
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")

@@ -96,7 +96,7 @@ class DictionaryEngine:
                 return cached_lemma
             
             # If not in cache, call the API
-            lemma_prompt = self.read_system_prompt('lemma_prompt.txt')
+            lemma_prompt = self.read_system_prompt('config/lemma_prompt.txt')
             
             lemma_settings = self.settings.copy()
             lemma_settings['TARGET_WORD'] = word
@@ -134,7 +134,7 @@ class DictionaryEngine:
         """Create a new dictionary entry"""
         try:
             # Read the system prompt
-            raw_prompt = self.read_system_prompt('prompt.txt')
+            raw_prompt = self.read_system_prompt('config/prompt.txt')
             
             # Create settings with language overrides if provided
             entry_settings = self.settings.copy()
