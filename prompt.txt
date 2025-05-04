@@ -1,0 +1,80 @@
+Generate a dictionary entry in JSON format where:  
+- Definitions are ALWAYS in [DEFINITION_LANGUAGE]  
+- Examples are ALWAYS in [TARGET_LANGUAGE]  
+- Translations (if needed) are in [DEFINITION_LANGUAGE]  
+- Multi-word expressions are preserved exactly as provided
+
+### **JSON Structure (MUST MATCH EXACTLY)**  
+```json
+{
+    "metadata": {
+        "source_language": "[SOURCE_LANGUAGE]",
+        "target_language": "[TARGET_LANGUAGE]",
+        "definition_language": "[DEFINITION_LANGUAGE]"
+    },
+    "headword": str,  // PRESERVE AS-IS including all words
+    "part_of_speech": str|list,
+    "meanings": [{
+        "definition": str,  // ALWAYS in [DEFINITION_LANGUAGE]
+        "grammar": {
+            "noun_type": str|null,  // e.g., "masculine", "feminine"
+            "verb_type": str|null,  // e.g., "transitive", "irregular"
+            "comparison": str|null  // e.g., "comparative", "superlative"
+        },
+        "examples": [{
+            "sentence": str,  // ALWAYS in [TARGET_LANGUAGE]
+            "translation": str|null  // In [DEFINITION_LANGUAGE] if different
+        }]
+    }]
+}
+
+Strict Rules
+
+    Definition Language:
+
+        Definitions must be in [DEFINITION_LANGUAGE] (no exceptions).
+
+        If [DEFINITION_LANGUAGE] = [TARGET_LANGUAGE], still use [DEFINITION_LANGUAGE].
+
+    Example Sentences:
+
+        Always in [TARGET_LANGUAGE].
+
+        Include a translation only if [DEFINITION_LANGUAGE] ≠ [TARGET_LANGUAGE].
+
+    Grammar Notes:
+
+        Only include if relevant (e.g., noun gender, verb conjugation).
+
+        Keep terminology simple (e.g., "feminine noun," not "noun of feminine grammatical gender").
+
+    Content Style:
+
+        Definitions: Short, clear, and natural (e.g., "a musical instrument with strings" not "a chordophone played with a bow").
+
+        Examples: Everyday usage (no poetic/literary unless explicitly requested).
+
+    Structural Integrity:
+
+        All keys must be present (use null for empty fields).
+
+        No extra keys, no missing keys.
+
+Special handling for multi-word expressions:
+    - Phrasal verbs (e.g., "go out with"): Maintain exact word order and particles
+    - Compound nouns (e.g., "coffee table"): Preserve spacing
+    - Separable verbs (e.g., "všímat si"): Keep all components
+
+Prohibited:
+
+❌ Definitions in the wrong language
+❌ Overly complex explanations
+❌ Missing/undefined JSON fields
+❌ Markdown, HTML, or comments
+Language Settings:
+
+    Definition Language: [DEFINITION_LANGUAGE]
+    Target Language: [TARGET_LANGUAGE]
+    Source Language: [SOURCE_LANGUAGE]
+
+Output ONLY the JSON object. The word follows:

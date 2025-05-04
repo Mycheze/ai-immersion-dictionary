@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+*.db
+api_key.txt
+user_settings.json
+*.sh
+*.swp
+depricated/
+todo.md

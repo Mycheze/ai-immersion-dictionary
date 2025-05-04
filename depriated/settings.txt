@@ -1,0 +1,2 @@
+ [BASE_LANGUAGE] = English
+ [TARGET_LANGUAGE] = Czech

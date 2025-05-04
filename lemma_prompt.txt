@@ -1,0 +1,6 @@
+For the word or phrase '[TARGET_WORD]', return ONLY the dictionary headword (lemma) in its base form, in [TARGET_LANGUAGE]. 
+Follow these rules:
+1. If '[TARGET_WORD]' is already in [TARGET_LANGUAGE], return its lemma directly.
+2. If '[TARGET_WORD]' is in another language (e.g., [SOURCE_LANGUAGE]), first translate it to [TARGET_LANGUAGE], then return the lemma.
+3. Preserve all words in multi-word expressions (e.g., "to go out with" → "go out with", "všímat si" → "všímat si")
+4. Output MUST be one or more [TARGET_LANGUAGE] words, preserving spaces where appropriate, with no additional text, explanations, or punctuation.
