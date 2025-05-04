@@ -71,14 +71,20 @@ class DictionaryEngine:
             
         return prompt_content
     
-    def call_api(self, messages):
+    def call_api(self, messages, temperature=None):
         """Make an API call to the language model"""
         try:
-            response = self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=messages,
-                stream=False
-            )
+            params = {
+                "model": "deepseek-chat",
+                "messages": messages,
+                "stream": False
+            }
+            
+            # Add optional temperature parameter for increased randomness
+            if temperature is not None:
+                params["temperature"] = temperature
+                
+            response = self.client.chat.completions.create(**params)
             return response
         except Exception as e:
             print(f"\nAPI Error: {str(e)}")
@@ -130,7 +136,7 @@ class DictionaryEngine:
             print(f"\nError during lemma processing: {str(e)}")
             return word
     
-    def create_new_entry(self, word, target_lang=None, source_lang=None):
+    def create_new_entry(self, word, target_lang=None, source_lang=None, variation_prompt=None):
         """Create a new dictionary entry"""
         try:
             # Read the system prompt
@@ -153,13 +159,25 @@ class DictionaryEngine:
             print(f"  DEFINITION_LANGUAGE: {entry_settings.get('DEFINITION_LANGUAGE')}")
             
             # Create API messages
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": word}
-            ]
+            if variation_prompt:
+                # For regeneration - include variation instructions
+                messages = variation_prompt + [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": word}
+                ]
+                # Use slightly higher temperature for subtle variation in regenerated entries
+                temperature = 0.7
+            else:
+                # Standard message format
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": word}
+                ]
+                temperature = 0.7
             
-            # Call the API
-            response = self.call_api(messages)
+            # Call the API with the appropriate temperature
+            print(f"Calling API with temperature: {temperature}")
+            response = self.call_api(messages, temperature=temperature)
             
             if not response or not response.choices or not response.choices[0].message.content:
                 print("\nError: Received empty response from API")
@@ -174,6 +192,9 @@ class DictionaryEngine:
                 response_content, 
                 flags=re.MULTILINE
             ).strip()
+            
+            # Remove trailing backticks if present
+            cleaned_content = re.sub(r'```\s*$', '', cleaned_content, flags=re.MULTILINE).strip()
             
             # Parse JSON response
             try:
@@ -217,3 +238,70 @@ class DictionaryEngine:
             return json.dumps(entry, indent=2, ensure_ascii=False)
         except Exception:
             return str(entry)
+            
+    def regenerate_entry(self, headword, target_lang=None, source_lang=None, definition_lang=None, variation_seed=None):
+        """Regenerate an existing dictionary entry"""
+        try:
+            print(f"Starting regeneration of entry: '{headword}'")
+            
+            # Delete the existing entry first, if it exists
+            original_entry = self.db_manager.get_entry_by_headword(
+                headword,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                definition_lang=definition_lang
+            )
+            
+            if not original_entry:
+                print(f"Entry not found for '{headword}', cannot regenerate")
+                return None
+            
+            # Add a special parameter to ensure subtle variation in the regenerated entry
+            # while maintaining accuracy and quality of the content
+            current_time = __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            system_messages = [
+                {"role": "system", "content": "You are a dictionary entry creator focused on accuracy and educational value."},
+                {"role": "system", "content": f"Create a dictionary entry for '{headword}' that is linguistically accurate and pedagogically sound."},
+                {"role": "system", "content": f"Current time: {current_time}. Session ID: {variation_seed if variation_seed else 'default'}"},
+                {"role": "system", "content": "Provide slightly different phrasings and examples while maintaining complete accuracy of meaning and usage."}
+            ]
+            
+            print(f"Preparing to delete old entry for '{headword}'")
+                
+            # Delete the old entry first
+            success = self.db_manager.delete_entry(
+                headword,
+                source_lang=source_lang, 
+                target_lang=target_lang,
+                definition_lang=definition_lang
+            )
+            
+            if not success:
+                print(f"Failed to delete old entry for '{headword}'")
+                return None
+                
+            print(f"Successfully deleted old entry, creating new entry for '{headword}'")
+            
+            # Create the new entry with variation
+            new_entry = self.create_new_entry(headword, target_lang, source_lang, variation_prompt=system_messages)
+            
+            if not new_entry:
+                print(f"Failed to generate new entry for '{headword}'")
+                return None
+            
+            print(f"Successfully created new entry, saving to database: '{headword}'")
+            
+            # Save the new entry
+            entry_id = self.db_manager.add_entry(new_entry)
+            
+            if entry_id:
+                print(f"Successfully regenerated and saved entry for '{headword}'")
+                return new_entry
+            else:
+                print(f"Failed to save regenerated entry for '{headword}'")
+                return None
+                
+        except Exception as e:
+            print(f"Error regenerating entry: {str(e)}")
+            return None

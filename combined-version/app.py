@@ -1,17 +1,50 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 import json
 import os
 import sys
+import time
 from dictionary_engine import DictionaryEngine
 from user_settings import UserSettings
 from database_manager import DatabaseManager
+try:
+    # On Windows and macOS
+    import pyperclip
+except ImportError:
+    # On Linux (requires additional packages)
+    try:
+        import subprocess
+        def paste():
+            try:
+                return subprocess.check_output(['xclip', '-selection', 'clipboard', '-o']).decode('utf-8')
+            except Exception:
+                try:
+                    return subprocess.check_output(['xsel', '-b']).decode('utf-8')
+                except Exception:
+                    return ""
+        
+        class Pyperclip:
+            @staticmethod
+            def paste():
+                return paste()
+        
+        pyperclip = Pyperclip
+    except Exception as e:
+        print(f"Failed to set up clipboard fallback: {e}")
+        # Create a dummy clipboard class for graceful fallback
+        class DummyClipboard:
+            @staticmethod
+            def paste():
+                return ""
+        
+        pyperclip = DummyClipboard
+        print("Using dummy clipboard implementation")
 
 class DictionaryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AI-Powered Immersion Dictionary")
-        self.root.geometry("900x720")
+        self.root.geometry("900x760")
         
         # Initialize database manager
         self.db_manager = DatabaseManager()
@@ -24,6 +57,14 @@ class DictionaryApp:
         
         # Load existing dictionary data from database
         self.filtered_data = []
+        
+        # Store the current entry for delete/regenerate operations
+        self.current_entry = None
+        
+        # Clipboard monitoring state
+        self.clipboard_monitoring = False
+        self.last_clipboard_content = ""
+        self.clipboard_check_interval = 500  # milliseconds
         
         # Setup the GUI layout
         self.setup_gui()
@@ -151,12 +192,38 @@ class DictionaryApp:
         self.update_language_options()
     
     def create_entry_display(self):
+        # Container frame for the entry display and action buttons
+        self.entry_container = tk.Frame(self.right_panel)
+        self.entry_container.pack(expand=True, fill=tk.BOTH)
+        
         # Entry display
         self.entry_display = scrolledtext.ScrolledText(
-            self.right_panel, wrap=tk.WORD, font=("Arial", 12), padx=10, pady=10
+            self.entry_container, wrap=tk.WORD, font=("Arial", 12), padx=10, pady=10
         )
         self.entry_display.pack(expand=True, fill=tk.BOTH)
         self.entry_display.config(state=tk.DISABLED)
+        
+        # Action buttons frame (at the bottom right)
+        self.action_buttons_frame = tk.Frame(self.entry_container, bg="#f0f0f0")
+        self.action_buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        
+        # Delete button (trash can)
+        self.delete_button = ttk.Button(
+            self.action_buttons_frame, 
+            text="🗑️", 
+            width=3,
+            command=self.delete_current_entry
+        )
+        self.delete_button.pack(side=tk.RIGHT, padx=(0, 5))
+        
+        # Regenerate button (refresh icon)
+        self.regenerate_button = ttk.Button(
+            self.action_buttons_frame, 
+            text="🔄", 
+            width=3,
+            command=self.regenerate_current_entry
+        )
+        self.regenerate_button.pack(side=tk.RIGHT, padx=5)
         
         # Configure tags for formatting
         self.entry_display.tag_config("language_header", font=("Arial", 10), foreground="gray")
@@ -193,6 +260,16 @@ class DictionaryApp:
         self.search_btn = ttk.Button(input_frame, text="Search", command=self.search_new_word)
         self.search_btn.pack(side=tk.LEFT, padx=5)
         
+        # Add clipboard monitoring checkbox
+        self.clipboard_monitor_var = tk.BooleanVar(value=False)
+        self.clipboard_monitor_cb = ttk.Checkbutton(
+            input_frame,
+            text="Enable clipboard monitoring",
+            variable=self.clipboard_monitor_var,
+            command=self.toggle_clipboard_monitoring
+        )
+        self.clipboard_monitor_cb.pack(side=tk.LEFT, padx=10)
+        
         # Add a hint about current language settings
         hint_frame = tk.Frame(search_frame)
         hint_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
@@ -219,6 +296,15 @@ class DictionaryApp:
             
         # Set definition language
         self.definition_lang_var.set(definition_lang)
+        
+        # Set clipboard monitoring state if it was saved
+        if hasattr(self, 'clipboard_monitor_var'):
+            clipboard_enabled = settings.get('clipboard_monitoring', False)
+            print(f"Loading clipboard monitoring setting: {clipboard_enabled}")
+            self.clipboard_monitor_var.set(clipboard_enabled)
+            if clipboard_enabled:
+                # Use after to ensure the UI is fully loaded before starting monitoring
+                self.root.after(1000, self.start_clipboard_monitoring)
         
         # Update the hint label
         self.update_hint_label()
@@ -348,12 +434,19 @@ class DictionaryApp:
         custom_languages = set(self.load_custom_languages())
         removed_languages = set(self.load_removed_languages())
         
+        # Print debug info
+        print(f"Languages in database: {db_languages}")
+        print(f"Custom languages: {custom_languages}")
+        print(f"Removed languages: {removed_languages}")
+        
         # Combine all languages and remove the ones marked as removed
         all_languages = db_languages.union(custom_languages) - removed_languages
         
         # Sort languages (keeping "All" at the top for target language)
         target_languages = ["All"] + sorted(all_languages)
         definition_languages = sorted(all_languages)
+        
+        print(f"Final languages shown: {all_languages}")
         
         self.target_lang_dropdown["values"] = target_languages
         self.definition_lang_dropdown["values"] = definition_languages
@@ -405,17 +498,31 @@ class DictionaryApp:
         # Find the exact entry that matches current filter settings
         target_lang = self.target_lang_var.get()
         definition_lang = self.definition_lang_var.get()
+        source_lang = self.source_lang_var.get()
         
-        entry = None
-        for e in self.filtered_data:
-            if e["headword"] == selected_word:
-                if (target_lang == "All" or e["metadata"]["target_language"] == target_lang) and \
-                   (e["metadata"]["definition_language"] == definition_lang):
-                    entry = e
-                    break
+        # Get the entry directly from the database to ensure we have the most up-to-date version
+        entry = self.db_manager.get_entry_by_headword(
+            selected_word,
+            source_lang=source_lang,
+            target_lang=None if target_lang == "All" else target_lang,
+            definition_lang=definition_lang
+        )
         
         if entry:
+            # Store a reference to the current entry for delete/regenerate operations
+            self.current_entry = entry
+            # Display the entry
             self.display_entry(entry)
+        else:
+            # If not found in database, fall back to filtered data
+            for e in self.filtered_data:
+                if e["headword"] == selected_word:
+                    if (target_lang == "All" or e["metadata"]["target_language"] == target_lang) and \
+                       (e["metadata"]["definition_language"] == definition_lang):
+                        entry = e
+                        self.current_entry = entry
+                        self.display_entry(entry)
+                        break
     
     def search_new_word(self):
         """Handle searching for a new word"""
@@ -502,8 +609,8 @@ class DictionaryApp:
     def create_toolbar(self):
         # Add manage languages button with submenu
         self.manage_lang_menu = tk.Menu(self.root, tearoff=0)
-        self.manage_lang_menu.add_command(label="Add Language", command=self.show_add_language_dialog)
-        self.manage_lang_menu.add_command(label="Remove Language", command=self.show_remove_language_dialog)
+        self.manage_lang_menu.add_command(label="Add or Restore Language", command=self.show_add_language_dialog)
+        self.manage_lang_menu.add_command(label="Hide Language", command=self.show_remove_language_dialog)
         
         self.manage_lang_btn = ttk.Button(self.top_panel, text="Manage Languages", command=self.show_language_menu)
         self.manage_lang_btn.pack(side=tk.RIGHT, padx=5, pady=5)
@@ -534,7 +641,7 @@ class DictionaryApp:
         # Create a new top-level window
         dialog = tk.Toplevel(self.root)
         dialog.title("Add New Language")
-        dialog.geometry("350x200")
+        dialog.geometry("450x300")
         dialog.transient(self.root)  # Set to be on top of the main window
         dialog.grab_set()  # Make it modal
         
@@ -550,19 +657,46 @@ class DictionaryApp:
         frame = ttk.Frame(dialog, padding=20)
         frame.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(frame, text="Add New Language", font=("Arial", 12, "bold")).pack(pady=(0, 10))
-        ttk.Label(frame, text="Enter language name:").pack(pady=(0, 5))
+        ttk.Label(frame, text="Add Language", font=("Arial", 12, "bold")).pack(pady=(0, 10))
+        
+        # Create tabs for two ways to add a language
+        tab_control = ttk.Notebook(frame)
+        
+        # Tab 1: Add new language
+        tab1 = ttk.Frame(tab_control)
+        tab_control.add(tab1, text="Add New Language")
+        
+        ttk.Label(tab1, text="Enter language name:").pack(pady=(10, 5))
         
         language_var = tk.StringVar()
-        language_entry = ttk.Entry(frame, textvariable=language_var, width=30)
+        language_entry = ttk.Entry(tab1, textvariable=language_var, width=30)
         language_entry.pack(pady=(0, 15))
         language_entry.focus()
         
+        # Tab 2: Restore removed language
+        tab2 = ttk.Frame(tab_control)
+        tab_control.add(tab2, text="Restore Removed Language")
+        
+        # Get removed languages
+        removed_languages = self.load_removed_languages()
+        
+        if not removed_languages:
+            ttk.Label(tab2, text="No removed languages to restore", foreground="gray").pack(pady=20)
+            restore_combo = None
+            restore_var = None
+        else:
+            ttk.Label(tab2, text="Select language to restore:").pack(pady=(10, 5))
+            restore_var = tk.StringVar()
+            restore_combo = ttk.Combobox(tab2, textvariable=restore_var, values=sorted(removed_languages), state="readonly", width=28)
+            restore_combo.pack(pady=(0, 15))
+        
+        tab_control.pack(expand=1, fill="both")
+        
         # Button frame
         button_frame = ttk.Frame(frame)
-        button_frame.pack(fill=tk.X)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        def add_language():
+        def add_new_language():
             new_language = language_var.get().strip()
             if new_language:
                 # Update the dropdown options
@@ -582,15 +716,37 @@ class DictionaryApp:
                     self.show_status_message(f"Language '{new_language}' already exists")
                 
                 dialog.destroy()
+                
+        def restore_language():
+            if restore_var and restore_combo:
+                language_to_restore = restore_var.get().strip()
+                if language_to_restore:
+                    # Remove from the removed_languages list
+                    self.remove_from_removed_languages(language_to_restore)
+                    
+                    # Update language options
+                    self.update_language_options()
+                    
+                    # Show success message
+                    self.show_status_message(f"Restored language: {language_to_restore}")
+                    
+                    dialog.destroy()
+        
+        def handle_action():
+            current_tab = tab_control.index(tab_control.select())
+            if current_tab == 0:  # Add new language tab
+                add_new_language()
+            else:  # Restore language tab
+                restore_language()
         
         def cancel():
             dialog.destroy()
         
-        ttk.Button(button_frame, text="Add", command=add_language).pack(side=tk.RIGHT, padx=(0, 5))
+        ttk.Button(button_frame, text="Apply", command=handle_action).pack(side=tk.RIGHT, padx=(0, 5))
         ttk.Button(button_frame, text="Cancel", command=cancel).pack(side=tk.RIGHT)
         
-        # Bind Enter key to add language
-        language_entry.bind("<Return>", lambda e: add_language())
+        # Bind Enter key to add language when in the entry field
+        language_entry.bind("<Return>", lambda e: add_new_language())
     
     def show_remove_language_dialog(self):
         """Show dialog to remove a language from the dropdown"""
@@ -685,10 +841,259 @@ class DictionaryApp:
         if language not in removed_languages:
             removed_languages.append(language)
             self.user_settings.update_settings({'removed_languages': removed_languages})
+            print(f"Added '{language}' to removed languages list.")
+    
+    def remove_from_removed_languages(self, language):
+        """Remove a language from the removed languages list"""
+        removed_languages = self.user_settings.get_setting('removed_languages', [])
+        
+        if language in removed_languages:
+            removed_languages.remove(language)
+            self.user_settings.update_settings({'removed_languages': removed_languages})
+            print(f"Removed '{language}' from removed languages list.")
+            return True
+        else:
+            print(f"Warning: '{language}' not found in removed languages list.")
+            return False
     
     def load_removed_languages(self):
         """Load removed languages from user settings"""
         return self.user_settings.get_setting('removed_languages', [])
+    
+    def toggle_clipboard_monitoring(self):
+        """Toggle clipboard monitoring on/off"""
+        is_enabled = self.clipboard_monitor_var.get()
+        
+        print(f"Toggle clipboard monitoring: {is_enabled}")
+        
+        if is_enabled:
+            # If we're about to enable monitoring, force a single clipboard check right away
+            try:
+                current_clip = pyperclip.paste()
+                print(f"Current clipboard content: '{current_clip}'")
+                if current_clip.strip():
+                    # Update the field with current clipboard content immediately
+                    self.update_entry_from_clipboard(current_clip)
+            except Exception as e:
+                print(f"Error accessing clipboard during toggle: {e}")
+            
+            self.start_clipboard_monitoring()
+            print("Clipboard monitoring enabled")
+            
+            # Add message to entry field if it's empty
+            if not self.new_word_var.get().strip():
+                self.show_status_message("Clipboard monitoring enabled. Copy text to automatically fill the search box.")
+        else:
+            self.stop_clipboard_monitoring()
+            print("Clipboard monitoring disabled")
+            self.show_status_message("Clipboard monitoring disabled")
+            
+        # Save the setting
+        self.user_settings.update_settings({'clipboard_monitoring': is_enabled})
+    
+    def start_clipboard_monitoring(self):
+        """Start the clipboard monitoring process"""
+        if not self.clipboard_monitoring:
+            self.clipboard_monitoring = True
+            # Get initial clipboard content
+            try:
+                self.last_clipboard_content = pyperclip.paste()
+                print(f"Initial clipboard content: '{self.last_clipboard_content}'")
+            except Exception as e:
+                print(f"Error accessing clipboard: {e}")
+                self.last_clipboard_content = ""
+            
+            # Add debug output to the status area
+            self.show_status_message(f"Clipboard monitoring enabled. Checking every {self.clipboard_check_interval/1000} seconds.")
+            self.root.update()
+            
+            # Start the periodic clipboard check
+            self.check_clipboard()
+            
+    def stop_clipboard_monitoring(self):
+        """Stop clipboard monitoring"""
+        self.clipboard_monitoring = False
+        
+    def check_clipboard(self):
+        """Check for changes in clipboard content"""
+        if not self.clipboard_monitoring:
+            return
+            
+        try:
+            # Get current clipboard content
+            clipboard_content = pyperclip.paste()
+            
+            # Debug print for every check
+            print(f"Clipboard check - Current: '{clipboard_content}', Last: '{self.last_clipboard_content}'")
+            
+            # If content has changed and isn't empty
+            if clipboard_content != self.last_clipboard_content and clipboard_content.strip():
+                print(f"New clipboard content detected: '{clipboard_content}'")
+                self.last_clipboard_content = clipboard_content
+                
+                # Update the entry box with new content
+                self.update_entry_from_clipboard(clipboard_content)
+                
+                # Give visual feedback that clipboard content was detected
+                self.new_word_entry.focus_set()
+                self.new_word_entry.selection_range(0, 'end')
+        except Exception as e:
+            print(f"Error checking clipboard: {e}")
+            # Try to continue anyway
+            pass
+        
+        # ALWAYS schedule the next check, regardless of what happened above
+        # This ensures continuous monitoring until explicitly disabled
+        self.root.after(self.clipboard_check_interval, self.check_clipboard)
+    
+    def update_entry_from_clipboard(self, content):
+        """Update the entry box with clipboard content"""
+        # Clear the current content
+        self.new_word_entry.delete(0, tk.END)
+        
+        # Insert new content (trimmed to first line if multiline)
+        first_line = content.strip().split('\n')[0]
+        self.new_word_var.set(first_line)
+        
+        # Visual feedback that content was updated
+        self.new_word_entry.config(background="#f0fff0")  # Light green background
+        
+        # Reset background color after a short delay
+        self.root.after(500, lambda: self.new_word_entry.config(background="white"))
+        
+    def delete_current_entry(self):
+        """Delete the currently displayed entry"""
+        if not self.current_entry:
+            self.show_status_message("No entry selected to delete.")
+            return
+            
+        headword = self.current_entry["headword"]
+        metadata = self.current_entry["metadata"]
+        
+        # Print debug info
+        print(f"Attempting to delete entry: '{headword}'")
+        print(f"Source language: {metadata['source_language']}")
+        print(f"Target language: {metadata['target_language']}")
+        print(f"Definition language: {metadata['definition_language']}")
+        
+        # Ask for confirmation
+        confirm = tk.messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete '{headword}'?\nThis action cannot be undone."
+        )
+        
+        if not confirm:
+            return
+            
+        # Delete the entry with explicit language parameters
+        success = self.db_manager.delete_entry(
+            headword,
+            source_lang=metadata["source_language"],
+            target_lang=metadata["target_language"],
+            definition_lang=metadata["definition_language"]
+        )
+        
+        if success:
+            print(f"Successfully deleted entry '{headword}' from database")
+            
+            # Clear the current entry
+            self.current_entry = None
+            
+            # Clear the display
+            self.clear_entry_display()
+            
+            # Show status message
+            self.show_status_message(f"Entry '{headword}' deleted successfully.")
+            
+            # Force redraw of the UI
+            self.root.update_idletasks()
+            
+            # Reload data from the database
+            self.reload_data()
+            
+            # Manually search to ensure entry is no longer in filtered data
+            found = False
+            for entry in self.filtered_data:
+                if entry["headword"] == headword:
+                    found = True
+                    break
+                    
+            if found:
+                print(f"WARNING: Entry '{headword}' still found in filtered data after deletion")
+            else:
+                print(f"Confirmed: Entry '{headword}' no longer in filtered data")
+        else:
+            self.show_status_message(f"Failed to delete entry '{headword}'.")
+    
+    def regenerate_current_entry(self):
+        """Regenerate the currently displayed entry"""
+        if not self.current_entry:
+            self.show_status_message("No entry selected to regenerate.")
+            return
+            
+        headword = self.current_entry["headword"]
+        metadata = self.current_entry["metadata"]
+        
+        # Print debug info
+        print(f"Attempting to regenerate entry: '{headword}'")
+        print(f"Source language: {metadata['source_language']}")
+        print(f"Target language: {metadata['target_language']}")
+        print(f"Definition language: {metadata['definition_language']}")
+        
+        # Ask for confirmation
+        confirm = tk.messagebox.askyesno(
+            "Confirm Regenerate",
+            f"Are you sure you want to regenerate '{headword}'?\nThis will replace the current entry with a new one."
+        )
+        
+        if not confirm:
+            return
+            
+        # Show status
+        self.show_status_message(f"Regenerating: '{headword}'...")
+        self.root.update()
+        
+        # Force the UI to update before we start the regeneration process
+        self.root.after(100)
+        
+        # Add random seed to ensure variation
+        import time
+        import random
+        random.seed(time.time())
+        variation_seed = random.randint(1, 10000)
+        
+        # Regenerate the entry with added variation instructions and random seed
+        new_entry = self.dictionary_engine.regenerate_entry(
+            headword,
+            target_lang=metadata["target_language"],
+            source_lang=metadata["source_language"],
+            definition_lang=metadata["definition_language"],
+            variation_seed=variation_seed
+        )
+        
+        if new_entry:
+            print(f"Successfully regenerated entry '{headword}'")
+            
+            # Update the current entry
+            self.current_entry = new_entry
+            
+            # Display the new entry
+            self.display_entry(new_entry)
+            
+            # Force redraw of the UI
+            self.root.update_idletasks()
+            
+            # Reload data from the database
+            self.reload_data()
+            
+            # Update the headword list and select the entry
+            self.update_headword_list()
+            self.select_and_show_headword(headword.lower())
+            
+            # Show success message
+            self.show_status_message(f"Entry '{headword}' regenerated successfully.")
+        else:
+            self.show_status_message(f"Failed to regenerate entry '{headword}'.")
 
 # Run the application
 if __name__ == "__main__":

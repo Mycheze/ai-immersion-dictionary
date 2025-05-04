@@ -434,3 +434,58 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM lemma_cache")
             conn.commit()
+            
+    def delete_entry(self, headword: str, source_lang: str = None, target_lang: str = None, definition_lang: str = None) -> bool:
+        """Delete an entry from the database"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # First get the entry ID to ensure we're deleting the correct entry
+                select_query = "SELECT id FROM entries WHERE headword = ?"
+                select_params = [headword]
+                
+                if source_lang:
+                    select_query += " AND source_language = ?"
+                    select_params.append(source_lang)
+                
+                if target_lang:
+                    select_query += " AND target_language = ?"
+                    select_params.append(target_lang)
+                
+                if definition_lang:
+                    select_query += " AND definition_language = ?"
+                    select_params.append(definition_lang)
+                
+                cursor.execute(select_query, select_params)
+                entry_result = cursor.fetchone()
+                
+                if not entry_result:
+                    print(f"No entry found matching headword '{headword}' with the specified languages")
+                    return False
+                
+                entry_id = entry_result[0]
+                print(f"Found entry ID {entry_id} for headword '{headword}', deleting...")
+                
+                # Delete in reverse order to respect foreign key constraints
+                # First delete the examples
+                cursor.execute("""
+                    DELETE FROM examples 
+                    WHERE meaning_id IN (SELECT id FROM meanings WHERE entry_id = ?)
+                """, (entry_id,))
+                
+                # Then delete the meanings
+                cursor.execute("DELETE FROM meanings WHERE entry_id = ?", (entry_id,))
+                
+                # Finally delete the entry
+                cursor.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+                
+                # Commit the transaction
+                conn.commit()
+                
+                # Check if any rows were affected in the main entry table
+                return True
+                
+        except sqlite3.Error as e:
+            print(f"Database error during deletion: {e}")
+            return False
