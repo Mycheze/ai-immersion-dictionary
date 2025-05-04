@@ -27,8 +27,32 @@ class UserSettings:
         """Return default settings"""
         return {
             'target_language': 'Czech',  # Language being learned
-            'source_language': 'English',  # Native language of the learner
-            'definition_language': 'English'  # Language for definitions
+            'source_language': 'English',  # Base language of the learner
+            'definition_language': 'English',  # Language for definitions
+            
+            # Anki integration settings
+            'anki_enabled': False,
+            'anki_url': 'http://localhost:8765',
+            'default_deck': 'Language Learning',
+            'default_note_type': 'Example-Based',
+            'note_types': {
+                'Example-Based': {
+                    'deck': 'Czech Examples',
+                    'field_mappings': {
+                        'Word': 'headword',
+                        'Definition': 'selected_meaning.definition', 
+                        'Example': 'selected_example.sentence',
+                        'Translation': 'selected_example.translation'
+                    },
+                    'empty_field_handling': {
+                        'Translation': {'action': 'default', 'default': '[No translation]'},
+                        'Grammar': {'action': 'skip'}
+                    }
+                }
+            },
+            'auto_export': False,
+            'skip_confirmation': False,
+            'tags': ['AI-Dictionary']
         }
     
     def save_settings(self):
@@ -62,7 +86,7 @@ class UserSettings:
         # Map our settings to the template format
         replacements['TARGET_LANGUAGE'] = self.settings.get('target_language', 'Czech')
         replacements['SOURCE_LANGUAGE'] = self.settings.get('source_language', 'English')
+        replacements['BASE_LANGUAGE'] = self.settings.get('source_language', 'English')  # Alias for SOURCE_LANGUAGE
         replacements['DEFINITION_LANGUAGE'] = self.settings.get('definition_language', 'English')
-        replacements['BASE_LANGUAGE'] = self.settings.get('definition_language', 'English')  # For backward compatibility
         
         return replacements

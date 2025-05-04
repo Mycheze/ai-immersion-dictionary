@@ -25,6 +25,9 @@ class DictionaryEngine:
         
         # Use provided database manager or create a new one
         self.db_manager = db_manager if db_manager else DatabaseManager()
+        
+        # Cache for validated language names
+        self.language_validation_cache = {}
     
     def read_api_key(self, filename):
         """Read API key from file"""
@@ -155,7 +158,7 @@ class DictionaryEngine:
             # Debug: Print the settings being used
             print(f"Creating entry with settings:")
             print(f"  TARGET_LANGUAGE: {entry_settings.get('TARGET_LANGUAGE')}")
-            print(f"  SOURCE_LANGUAGE: {entry_settings.get('SOURCE_LANGUAGE')}")
+            print(f"  BASE_LANGUAGE: {entry_settings.get('SOURCE_LANGUAGE')}")
             print(f"  DEFINITION_LANGUAGE: {entry_settings.get('DEFINITION_LANGUAGE')}")
             
             # Create API messages
@@ -239,6 +242,87 @@ class DictionaryEngine:
         except Exception:
             return str(entry)
             
+    def validate_language(self, language_name):
+        """
+        Validates a language name using the LLM.
+        Returns a dictionary with standardized_name and display_name.
+        """
+        try:
+            # Check if we have this language in cache
+            if language_name in self.language_validation_cache:
+                print(f"Cache hit for language validation: {language_name}")
+                return self.language_validation_cache[language_name]
+            
+            # Read the validation prompt template
+            validation_prompt = self.read_system_prompt('config/language_validation_prompt.txt')
+            
+            # Process the prompt with the language name
+            processed_prompt = validation_prompt.replace('[INPUT_LANGUAGE]', language_name)
+            
+            # Create the messages for the API call
+            messages = [
+                {"role": "system", "content": "You are a language identification and standardization assistant."},
+                {"role": "user", "content": processed_prompt}
+            ]
+            
+            # Call the API
+            response = self.call_api(messages)
+            
+            if not response or not response.choices or not response.choices[0].message.content:
+                print(f"\nError: Received empty response from language validation API call for '{language_name}'")
+                # Return default values if API fails
+                return {
+                    "standardized_name": language_name,
+                    "display_name": language_name
+                }
+            
+            # Extract the response content
+            response_content = response.choices[0].message.content.strip()
+            
+            # Clean JSON content if needed
+            cleaned_content = re.sub(
+                r'^\s*```(json)?\s*$', 
+                '', 
+                response_content, 
+                flags=re.MULTILINE
+            ).strip()
+            
+            # Remove trailing backticks if present
+            cleaned_content = re.sub(r'```\s*$', '', cleaned_content, flags=re.MULTILINE).strip()
+            
+            try:
+                # Parse the JSON response
+                validation_result = json.loads(cleaned_content)
+                
+                # Ensure we have the expected keys
+                if "standardized_name" not in validation_result or "display_name" not in validation_result:
+                    print(f"Missing expected keys in language validation response for '{language_name}'")
+                    validation_result = {
+                        "standardized_name": language_name, 
+                        "display_name": language_name
+                    }
+                
+                # Add to cache
+                self.language_validation_cache[language_name] = validation_result
+                return validation_result
+                
+            except json.JSONDecodeError:
+                print(f"Error parsing language validation response for '{language_name}'")
+                print(f"Raw response: {response_content}")
+                # Return default values if parsing fails
+                return {
+                    "standardized_name": language_name,
+                    "display_name": language_name
+                }
+                
+        except Exception as e:
+            print(f"Error validating language name '{language_name}': {str(e)}")
+            # Return default values if any exception occurs
+            return {
+                "standardized_name": language_name,
+                "display_name": language_name
+            }
+
     def regenerate_entry(self, headword, target_lang=None, source_lang=None, definition_lang=None, variation_seed=None):
         """Regenerate an existing dictionary entry"""
         try:

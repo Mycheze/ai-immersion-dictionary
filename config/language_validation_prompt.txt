@@ -1,0 +1,25 @@
+Given a language name '[INPUT_LANGUAGE]', format it according to these rules:
+
+1. Return a JSON object with two fields:
+   - "standardized_name": The language name in English, properly capitalized (e.g., "Japanese", "Spanish", "Mandarin Chinese")
+   - "display_name": The original input '[INPUT_LANGUAGE]' (preserve its exact spelling and formatting)
+
+2. If '[INPUT_LANGUAGE]' is already a valid language name in English:
+   - Keep it as is for "standardized_name", just ensure proper capitalization
+   - Example: "spanish" → {"standardized_name": "Spanish", "display_name": "spanish"}
+
+3. If '[INPUT_LANGUAGE]' is in a non-English language:
+   - Convert to the standard English name for "standardized_name"
+   - Keep the original for "display_name"
+   - Example: "español" → {"standardized_name": "Spanish", "display_name": "español"}
+
+4. For dialect or variant specifications:
+   - Preserve them in the standardized name, properly formatted
+   - Example: "brazilian portuguese" → {"standardized_name": "Brazilian Portuguese", "display_name": "brazilian portuguese"}
+
+5. For constructed languages or codes:
+   - Use standard names where they exist
+   - Example: "conlang" → {"standardized_name": "Constructed Language", "display_name": "conlang"}
+   - Example: "jp" → {"standardized_name": "Japanese", "display_name": "jp"}
+
+Return ONLY the JSON object without any additional text, explanations, or comments.

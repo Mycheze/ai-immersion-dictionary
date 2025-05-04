@@ -7,6 +7,8 @@ import time
 from dictionary_engine import DictionaryEngine
 from user_settings import UserSettings
 from database_manager import DatabaseManager
+from anki_integration import AnkiConnector, AnkiFieldMapper, AnkiExporter
+from anki_config_ui import AnkiConfigDialog
 try:
     # On Windows and macOS
     import pyperclip
@@ -66,6 +68,15 @@ class DictionaryApp:
         self.last_clipboard_content = ""
         self.clipboard_check_interval = 500  # milliseconds
         
+        # Initialize Anki connector
+        self.anki_connector = None
+        try:
+            settings = self.user_settings.get_settings()
+            if settings.get('anki_enabled', False):
+                self.anki_connector = AnkiConnector(settings.get('anki_url', 'http://localhost:8765'))
+        except Exception as e:
+            print(f"Failed to initialize Anki connector: {e}")
+        
         # Setup the GUI layout
         self.setup_gui()
         
@@ -116,7 +127,7 @@ class DictionaryApp:
             definition_lang = self.definition_lang_var.get()
             source_lang = self.source_lang_var.get()
             
-            status_text = f"Learning: {target_lang} | Definitions: {definition_lang} | Native: {source_lang}"
+            status_text = f"Learning: {target_lang} | Definitions: {definition_lang}"
             self.status_label.config(text=status_text)
     
     def create_frames(self):
@@ -171,11 +182,8 @@ class DictionaryApp:
         self.target_lang_dropdown.pack(fill=tk.X, pady=(0, 5))
         self.target_lang_dropdown.bind("<<ComboboxSelected>>", self.on_language_change)
         
-        # Source language (native language) - display only, not editable
-        tk.Label(self.language_filter_frame, text="Native Language:").pack(anchor=tk.W)
+        # Source language (base language) - hidden but kept for internal use
         self.source_lang_var = tk.StringVar(value="English")
-        self.source_lang_display = ttk.Label(self.language_filter_frame, text="English")
-        self.source_lang_display.pack(fill=tk.X, pady=(0, 5))
         
         # Definition language dropdown
         tk.Label(self.language_filter_frame, text="Definition Language:").pack(anchor=tk.W)
@@ -335,7 +343,7 @@ class DictionaryApp:
         self.user_settings.update_settings({
             'target_language': target_lang,
             'definition_language': definition_lang,
-            'source_language': 'English'  # Keep source language as English for now
+            'source_language': 'English'  # Keep base language as English for now
         })
         
         # Update the dictionary engine's settings
@@ -386,10 +394,32 @@ class DictionaryApp:
             if grammar_info:
                 self.entry_display.insert(tk.END, "   " + ", ".join(grammar_info) + "\n", "grammar")
             
-            # Display examples
-            for example in meaning["examples"]:
+            # Display examples with export buttons
+            for j, example in enumerate(meaning.get('examples', [])):
                 self.entry_display.insert(tk.END, f"\n   Example:\n", "example_label")
-                self.entry_display.insert(tk.END, f"   {example['sentence']}\n", "example")
+                
+                # Create a frame for example and export button
+                example_frame = tk.Frame(self.entry_display)
+                self.entry_display.window_create(tk.END, window=example_frame)
+                
+                # Example text
+                example_text = tk.Label(example_frame, text=f"   {example['sentence']}", 
+                                      font=("Arial", 12), wraplength=600, justify='left')
+                example_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                
+                # Export button (📤 icon)
+                if self.anki_connector:
+                    export_btn = ttk.Button(
+                        example_frame, 
+                        text="📤", 
+                        width=3,
+                        command=lambda m=i-1, e=j: self.export_example_to_anki(m, e)
+                    )
+                    export_btn.pack(side=tk.RIGHT, padx=5)
+                
+                self.entry_display.insert(tk.END, "\n")
+                
+                # Translation (if available)
                 if example.get("translation"):
                     self.entry_display.insert(tk.END, f"   {example['translation']}\n\n", "translation")
         
@@ -442,11 +472,37 @@ class DictionaryApp:
         # Combine all languages and remove the ones marked as removed
         all_languages = db_languages.union(custom_languages) - removed_languages
         
-        # Sort languages (keeping "All" at the top for target language)
-        target_languages = ["All"] + sorted(all_languages)
-        definition_languages = sorted(all_languages)
+        # Get the raw custom language data for handling standardized names
+        raw_custom_languages = self.user_settings.get_setting('custom_languages', [])
+        standardized_to_display = {}
         
-        print(f"Final languages shown: {all_languages}")
+        # Build mapping of standardized names to display names
+        for lang in raw_custom_languages:
+            if isinstance(lang, dict):
+                std_name = lang.get("standardized_name", "")
+                display_name = lang.get("display_name", std_name)
+                if std_name and display_name:
+                    standardized_to_display[std_name] = display_name
+        
+        # During removals, we need to check for both display and standardized names
+        filtered_languages = set()
+        for lang in all_languages:
+            # Check if this language (or its standardized/display name) is in removed_languages
+            if lang in removed_languages:
+                continue
+            
+            # Check if the standardized version of this name is removed
+            std_name = self.get_standardized_language_name(lang)
+            if std_name in removed_languages:
+                continue
+                
+            filtered_languages.add(lang)
+        
+        # Sort languages (keeping "All" at the top for target language)
+        target_languages = ["All"] + sorted(filtered_languages)
+        definition_languages = sorted(filtered_languages)
+        
+        print(f"Final languages shown: {filtered_languages}")
         
         self.target_lang_dropdown["values"] = target_languages
         self.definition_lang_dropdown["values"] = definition_languages
@@ -615,21 +671,36 @@ class DictionaryApp:
         self.manage_lang_btn = ttk.Button(self.top_panel, text="Manage Languages", command=self.show_language_menu)
         self.manage_lang_btn.pack(side=tk.RIGHT, padx=5, pady=5)
         
-        # Add reload button to top right
-        self.reload_btn = ttk.Button(self.top_panel, text="Reload Data", command=self.reload_data)
-        self.reload_btn.pack(side=tk.RIGHT, padx=5, pady=5)
+        # Add Anki configuration button
+        self.anki_config_btn = ttk.Button(self.top_panel, text="⚙️ Anki Config", command=self.show_anki_config)
+        self.anki_config_btn.pack(side=tk.RIGHT, padx=5, pady=5)
+        
+        # Create admin buttons (only shown when ALT is pressed)
+        self.admin_buttons_frame = tk.Frame(self.top_panel)
+        self.admin_buttons_frame.pack(side=tk.RIGHT, padx=5, pady=5)
+        
+        # Add reload button to admin frame
+        self.reload_btn = ttk.Button(self.admin_buttons_frame, text="Reload Data", command=self.reload_data)
+        self.reload_btn.pack(side=tk.RIGHT, padx=5, pady=0)
 
         # Add clear cache button for debugging
-        self.clear_cache_btn = ttk.Button(self.top_panel, text="Clear Lemma Cache", command=self.clear_lemma_cache)
-        self.clear_cache_btn.pack(side=tk.RIGHT, padx=5, pady=5)
+        self.clear_cache_btn = ttk.Button(self.admin_buttons_frame, text="Clear Lemma Cache", command=self.clear_lemma_cache)
+        self.clear_cache_btn.pack(side=tk.RIGHT, padx=5, pady=0)
 
         # Add migrate button for one-time migration from JSON
-        self.migrate_btn = ttk.Button(self.top_panel, text="Migrate JSON", command=self.migrate_json_data)
-        self.migrate_btn.pack(side=tk.RIGHT, padx=5, pady=5)
+        self.migrate_btn = ttk.Button(self.admin_buttons_frame, text="Migrate JSON", command=self.migrate_json_data)
+        self.migrate_btn.pack(side=tk.RIGHT, padx=5, pady=0)
+        
+        # Hide admin buttons by default
+        self.admin_buttons_frame.pack_forget()
 
         # Add application title to top left
         self.title_label = ttk.Label(self.top_panel, text="AI-Powered Dictionary", font=("Arial", 14, "bold"))
         self.title_label.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        # Bind key events to show/hide admin buttons
+        self.root.bind("<Alt-KeyPress>", self.show_admin_buttons)
+        self.root.bind("<Alt-KeyRelease>", self.hide_admin_buttons)
 
     def clear_lemma_cache(self):
         """Clear the lemma cache for debugging"""
@@ -641,7 +712,7 @@ class DictionaryApp:
         # Create a new top-level window
         dialog = tk.Toplevel(self.root)
         dialog.title("Add New Language")
-        dialog.geometry("450x300")
+        dialog.geometry("450x400")  # Taller dialog for confirmation step
         dialog.transient(self.root)  # Set to be on top of the main window
         dialog.grab_set()  # Make it modal
         
@@ -673,6 +744,11 @@ class DictionaryApp:
         language_entry.pack(pady=(0, 15))
         language_entry.focus()
         
+        # Status message for feedback
+        status_var = tk.StringVar()
+        status_label = ttk.Label(tab1, textvariable=status_var, foreground="blue")
+        status_label.pack(pady=(0, 5))
+        
         # Tab 2: Restore removed language
         tab2 = ttk.Frame(tab_control)
         tab_control.add(tab2, text="Restore Removed Language")
@@ -692,31 +768,89 @@ class DictionaryApp:
         
         tab_control.pack(expand=1, fill="both")
         
-        # Button frame
+        # Confirmation frame (initially hidden)
+        confirmation_frame = ttk.LabelFrame(frame, text="Confirm Language")
+        
+        ttk.Label(confirmation_frame, text="We detected this language as:").pack(pady=(5, 0))
+        
+        # Display detected language info
+        standardized_var = tk.StringVar()
+        standardized_label = ttk.Label(confirmation_frame, textvariable=standardized_var, font=("Arial", 10, "bold"))
+        standardized_label.pack(pady=(0, 10))
+        
+        ttk.Label(confirmation_frame, text="Display name:").pack(anchor=tk.W)
+        
+        # Allow user to edit display name
+        display_var = tk.StringVar()
+        display_entry = ttk.Entry(confirmation_frame, textvariable=display_var, width=30)
+        display_entry.pack(fill=tk.X, pady=(0, 10))
+        
+        # Confirmation buttons
+        confirm_btn_frame = ttk.Frame(confirmation_frame)
+        confirm_btn_frame.pack(fill=tk.X)
+        
+        def confirm_language():
+            # Save the validated language with both display and standardized names
+            self.save_custom_language(display_var.get(), standardized_var.get())
+            
+            # Update language options
+            self.update_language_options()
+            
+            # Show success message
+            self.show_status_message(f"Added language: {display_var.get()}")
+            
+            # Close dialog
+            dialog.destroy()
+        
+        def back_to_input():
+            # Hide confirmation frame and show tabs again
+            confirmation_frame.pack_forget()
+            tab_control.pack(expand=1, fill="both")
+            button_frame.pack(fill=tk.X, pady=(10, 0))
+            
+            # Clear the status message
+            status_var.set("")
+            
+            # Focus back on the language entry
+            language_entry.focus()
+        
+        ttk.Button(confirm_btn_frame, text="Confirm", command=confirm_language).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(confirm_btn_frame, text="Back", command=back_to_input).pack(side=tk.RIGHT)
+        
+        # Button frame for initial tabs
         button_frame = ttk.Frame(frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        def add_new_language():
+        def validate_and_add_language():
             new_language = language_var.get().strip()
-            if new_language:
-                # Update the dropdown options
-                languages = self.db_manager.get_all_languages()
-                all_current_languages = set(languages["target_languages"]) | set(languages["definition_languages"]) | set(self.load_custom_languages())
+            if not new_language:
+                status_var.set("Please enter a language name")
+                return
                 
-                if new_language not in all_current_languages:
-                    # Save the custom language to user settings
-                    self.save_custom_language(new_language)
-                    
-                    # Update language options
-                    self.update_language_options()
-                    
-                    # Show success message
-                    self.show_status_message(f"Added language: {new_language}")
-                else:
-                    self.show_status_message(f"Language '{new_language}' already exists")
-                
-                dialog.destroy()
-                
+            status_var.set("Validating language...")
+            dialog.update_idletasks()  # Force UI update
+            
+            # Check if language already exists
+            languages = self.db_manager.get_all_languages()
+            all_current_languages = set(languages["target_languages"]) | set(languages["definition_languages"]) | set(self.load_custom_languages())
+            
+            if new_language in all_current_languages:
+                status_var.set(f"Language '{new_language}' already exists")
+                return
+            
+            # Validate the language name using the dictionary engine
+            validation_result = self.dictionary_engine.validate_language(new_language)
+            
+            # Show confirmation dialog
+            standardized_var.set(validation_result["standardized_name"])
+            display_var.set(validation_result["display_name"])
+            
+            # Hide tabs and show confirmation
+            tab_control.pack_forget()
+            button_frame.pack_forget()
+            confirmation_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+            display_entry.focus()
+        
         def restore_language():
             if restore_var and restore_combo:
                 language_to_restore = restore_var.get().strip()
@@ -735,18 +869,18 @@ class DictionaryApp:
         def handle_action():
             current_tab = tab_control.index(tab_control.select())
             if current_tab == 0:  # Add new language tab
-                add_new_language()
+                validate_and_add_language()
             else:  # Restore language tab
                 restore_language()
         
         def cancel():
             dialog.destroy()
         
-        ttk.Button(button_frame, text="Apply", command=handle_action).pack(side=tk.RIGHT, padx=(0, 5))
+        ttk.Button(button_frame, text="Next", command=handle_action).pack(side=tk.RIGHT, padx=(0, 5))
         ttk.Button(button_frame, text="Cancel", command=cancel).pack(side=tk.RIGHT)
         
         # Bind Enter key to add language when in the entry field
-        language_entry.bind("<Return>", lambda e: add_new_language())
+        language_entry.bind("<Return>", lambda e: validate_and_add_language())
     
     def show_remove_language_dialog(self):
         """Show dialog to remove a language from the dropdown"""
@@ -820,37 +954,117 @@ class DictionaryApp:
         # Show the menu at the button location
         self.manage_lang_menu.tk_popup(x, y)
     
-    def save_custom_language(self, language):
-        """Save custom language to user settings"""
+    def save_custom_language(self, display_name, standardized_name=None):
+        """
+        Save custom language to user settings
+        
+        Args:
+            display_name: The display name of the language (user's original input)
+            standardized_name: The standardized English name of the language
+        """
+        # If standardized_name is not provided, use display_name
+        if standardized_name is None:
+            standardized_name = display_name
+            
         # Get current custom languages
         custom_languages = self.user_settings.get_setting('custom_languages', [])
         
-        if language not in custom_languages:
-            custom_languages.append(language)
-            self.user_settings.update_settings({'custom_languages': custom_languages})
+        # Structure for storing language data
+        language_entry = {
+            "display_name": display_name,
+            "standardized_name": standardized_name
+        }
+        
+        # Check if language already exists (by standardized name)
+        for i, lang in enumerate(custom_languages):
+            if isinstance(lang, dict) and lang.get("standardized_name") == standardized_name:
+                # Update existing entry
+                custom_languages[i] = language_entry
+                self.user_settings.update_settings({'custom_languages': custom_languages})
+                return
+            elif not isinstance(lang, dict) and lang == standardized_name:
+                # Replace string entry with dict entry
+                custom_languages[i] = language_entry
+                self.user_settings.update_settings({'custom_languages': custom_languages})
+                return
+        
+        # If we get here, language doesn't exist, so add it
+        custom_languages.append(language_entry)
+        self.user_settings.update_settings({'custom_languages': custom_languages})
     
     def load_custom_languages(self):
         """Load custom languages from user settings"""
-        return self.user_settings.get_setting('custom_languages', [])
+        languages = self.user_settings.get_setting('custom_languages', [])
+        
+        # Ensure we return a list of strings for compatibility
+        result = []
+        for lang in languages:
+            if isinstance(lang, dict):
+                # Add the display name for UI
+                result.append(lang.get("display_name", ""))
+            else:
+                # For backward compatibility with old string-based format
+                result.append(lang)
+                
+        return result
+        
+    def get_standardized_language_name(self, display_name):
+        """Get standardized name for a language display name"""
+        languages = self.user_settings.get_setting('custom_languages', [])
+        
+        # Search for the language in the custom_languages list
+        for lang in languages:
+            if isinstance(lang, dict):
+                if lang.get("display_name") == display_name:
+                    return lang.get("standardized_name", display_name)
+        
+        # If not found, return the display name
+        return display_name
     
     def save_removed_language(self, language):
         """Save removed language to user settings"""
         # Get current removed languages
         removed_languages = self.user_settings.get_setting('removed_languages', [])
         
+        # Get standardized name for this language (if it exists)
+        standardized_name = self.get_standardized_language_name(language)
+        
+        # Store both display name and standardized name to ensure proper removal
         if language not in removed_languages:
             removed_languages.append(language)
             self.user_settings.update_settings({'removed_languages': removed_languages})
             print(f"Added '{language}' to removed languages list.")
+        
+        # Also add standardized version if different and not already in list
+        if standardized_name != language and standardized_name not in removed_languages:
+            removed_languages.append(standardized_name)
+            self.user_settings.update_settings({'removed_languages': removed_languages})
+            print(f"Added standardized name '{standardized_name}' to removed languages list.")
     
     def remove_from_removed_languages(self, language):
         """Remove a language from the removed languages list"""
         removed_languages = self.user_settings.get_setting('removed_languages', [])
         
+        # Get standardized name for this language (if it exists)
+        standardized_name = self.get_standardized_language_name(language)
+        
+        removed = False
+        
+        # Remove display name if present
         if language in removed_languages:
             removed_languages.remove(language)
-            self.user_settings.update_settings({'removed_languages': removed_languages})
+            removed = True
             print(f"Removed '{language}' from removed languages list.")
+        
+        # Also remove standardized version if present
+        if standardized_name != language and standardized_name in removed_languages:
+            removed_languages.remove(standardized_name)
+            removed = True
+            print(f"Removed standardized name '{standardized_name}' from removed languages list.")
+        
+        # Update settings if anything was removed
+        if removed:
+            self.user_settings.update_settings({'removed_languages': removed_languages})
             return True
         else:
             print(f"Warning: '{language}' not found in removed languages list.")
@@ -859,6 +1073,16 @@ class DictionaryApp:
     def load_removed_languages(self):
         """Load removed languages from user settings"""
         return self.user_settings.get_setting('removed_languages', [])
+    
+    def show_admin_buttons(self, event=None):
+        """Show admin buttons when ALT key is pressed"""
+        if hasattr(self, 'admin_buttons_frame'):
+            self.admin_buttons_frame.pack(side=tk.RIGHT, padx=5, pady=5)
+    
+    def hide_admin_buttons(self, event=None):
+        """Hide admin buttons when ALT key is released"""
+        if hasattr(self, 'admin_buttons_frame'):
+            self.admin_buttons_frame.pack_forget()
     
     def toggle_clipboard_monitoring(self):
         """Toggle clipboard monitoring on/off"""
@@ -1094,6 +1318,169 @@ class DictionaryApp:
             self.show_status_message(f"Entry '{headword}' regenerated successfully.")
         else:
             self.show_status_message(f"Failed to regenerate entry '{headword}'.")
+            
+    def show_anki_config(self):
+        """Show Anki configuration dialog"""
+        dialog = AnkiConfigDialog(self.root, self.user_settings)
+        
+        # Wait for dialog to be closed
+        self.root.wait_window(dialog)
+        
+        # After dialog is closed, check if we need to re-initialize Anki connector
+        settings = self.user_settings.get_settings()
+        if settings.get('anki_enabled', False):
+            try:
+                self.anki_connector = AnkiConnector(settings.get('anki_url', 'http://localhost:8765'))
+                # Test connection
+                if self.anki_connector.test_connection():
+                    self.show_status_message("Connected to Anki successfully!")
+                else:
+                    self.show_status_message("Failed to connect to Anki. Check if Anki is running.")
+                    self.anki_connector = None
+            except Exception as e:
+                self.show_status_message(f"Error connecting to Anki: {str(e)}")
+                self.anki_connector = None
+        else:
+            self.anki_connector = None
+            
+        # Redisplay current entry to update export buttons
+        if self.current_entry:
+            self.display_entry(self.current_entry)
+    
+    def export_example_to_anki(self, meaning_index, example_index):
+        """Export a specific example to Anki"""
+        if not self.current_entry or not self.anki_connector:
+            return
+        
+        try:
+            meaning = self.current_entry["meanings"][meaning_index]
+            example = meaning["examples"][example_index]
+            
+            focused_entry = {
+                "headword": self.current_entry["headword"],
+                "part_of_speech": self.current_entry.get("part_of_speech", ""),
+                "metadata": self.current_entry["metadata"],
+                "selected_meaning": meaning,
+                "selected_example": example
+            }
+            
+            # Check if we should skip confirmation
+            settings = self.user_settings.get_settings()
+            if settings.get('skip_confirmation', False):
+                # Export directly without showing dialog
+                self.direct_export_to_anki(focused_entry)
+            else:
+                # Show dialog for confirmation
+                self.show_anki_export_dialog(focused_entry)
+        except (IndexError, KeyError) as e:
+            self.show_status_message(f"Error selecting example: {str(e)}")
+            
+    def direct_export_to_anki(self, focused_entry):
+        """Export entry directly to Anki without confirmation"""
+        settings = self.user_settings.get_settings()
+        note_type = settings.get('default_note_type', 'Example-Based')
+        note_config = settings.get('note_types', {}).get(note_type, {})
+        
+        field_mappings = note_config.get('field_mappings', {})
+        empty_handling = note_config.get('empty_field_handling', {})
+        
+        mapper = AnkiFieldMapper(field_mappings, empty_handling)
+        
+        try:
+            exporter = AnkiExporter(self.anki_connector, mapper, settings)
+            note_id = exporter.export_entry(focused_entry, note_type)
+            
+            if note_id:
+                self.show_status_message(f"Successfully exported '{focused_entry['headword']}' to Anki!")
+            else:
+                self.show_status_message("Export failed: No note ID returned")
+        except Exception as e:
+            self.show_status_message(f"Export failed: {str(e)}")
+
+    def show_anki_export_dialog(self, focused_entry):
+        """Show dialog to preview and confirm Anki export"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Export to Anki")
+        dialog.geometry("500x600")
+        dialog.transient(self.root)  # Set to be on top of the main window
+        
+        # Create preview frame
+        preview_frame = ttk.LabelFrame(dialog, text="Preview", padding=10)
+        preview_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # Generate preview
+        settings = self.user_settings.get_settings()
+        note_type = settings.get('default_note_type', 'Example-Based')
+        note_config = settings.get('note_types', {}).get(note_type, {})
+        
+        field_mappings = note_config.get('field_mappings', {})
+        empty_handling = note_config.get('empty_field_handling', {})
+        
+        mapper = AnkiFieldMapper(field_mappings, empty_handling)
+        fields = mapper.map_entry_to_fields(focused_entry)
+        
+        # Display preview
+        preview_text = scrolledtext.ScrolledText(preview_frame, height=10)
+        preview_text.pack(fill=tk.BOTH, expand=True)
+        
+        preview_text.insert(tk.END, f"Note Type: {note_type}\n\n")
+        preview_text.insert(tk.END, f"Deck: {note_config.get('deck', settings.get('default_deck', 'Default'))}\n\n")
+        preview_text.insert(tk.END, "Fields:\n\n")
+        
+        for field_name, value in fields.items():
+            if value:
+                preview_text.insert(tk.END, f"{field_name}:\n{value}\n\n")
+        
+        preview_text.config(state=tk.DISABLED)
+        
+        # Status label
+        status_var = tk.StringVar(value="Ready to export")
+        status_label = ttk.Label(dialog, textvariable=status_var)
+        status_label.pack(pady=5)
+        
+        # Button frame
+        button_frame = ttk.Frame(dialog)
+        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        # Export button
+        def do_export():
+            export_btn.config(state=tk.DISABLED)
+            status_var.set("Exporting...")
+            dialog.update_idletasks()
+            
+            try:
+                exporter = AnkiExporter(self.anki_connector, mapper, settings)
+                note_id = exporter.export_entry(focused_entry, note_type)
+                
+                if note_id:
+                    status_var.set("Successfully exported to Anki!")
+                    export_btn.config(state=tk.NORMAL)
+                    
+                    # Change button color to green to indicate success
+                    export_btn.config(style="Success.TButton")
+                    
+                    # Close dialog after a delay
+                    dialog.after(1500, dialog.destroy)
+                else:
+                    status_var.set("Export failed: No note ID returned")
+                    export_btn.config(state=tk.NORMAL)
+            except Exception as e:
+                status_var.set(f"Export failed: {str(e)}")
+                export_btn.config(state=tk.NORMAL)
+                
+                # Change button color to red to indicate failure
+                export_btn.config(style="Danger.TButton")
+        
+        # Create button styles
+        style = ttk.Style()
+        style.configure("Success.TButton", background="green", foreground="white")
+        style.configure("Danger.TButton", background="red", foreground="white")
+        
+        export_btn = ttk.Button(button_frame, text="Export", command=do_export)
+        export_btn.pack(side=tk.RIGHT, padx=5)
+        
+        cancel_btn = ttk.Button(button_frame, text="Cancel", command=dialog.destroy)
+        cancel_btn.pack(side=tk.RIGHT, padx=5)
 
 # Run the application
 if __name__ == "__main__":
