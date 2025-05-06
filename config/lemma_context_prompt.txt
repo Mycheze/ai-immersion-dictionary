@@ -1,0 +1,19 @@
+For the word or phrase '[TARGET_WORD]' in the following sentence:
+
+"[SENTENCE_CONTEXT]"
+
+Return ONLY the dictionary headword (lemma) in its base form, in [TARGET_LANGUAGE].
+
+Follow these rules:
+1. Use the sentence context to determine the correct lemma
+2. If '[TARGET_WORD]' is part of a multi-word expression, return the complete expression's lemma
+3. If '[TARGET_WORD]' is a conjugated/inflected form, return its base form
+4. If '[TARGET_WORD]' is already in its base form, return it as is
+5. Output MUST be one or more [TARGET_LANGUAGE] words, with no additional text, explanations, or punctuation
+
+Special handling for multi-word expressions:
+- Idioms/Fixed expressions: Return the full canonical form
+- Phrasal verbs: Include all particles in their correct positions
+- Compound terms: Preserve the entire compound (e.g., "coffee table" not just "table")
+
+Analyze the surrounding words in "[SENTENCE_CONTEXT]" to determine if '[TARGET_WORD]' is part of a larger expression.

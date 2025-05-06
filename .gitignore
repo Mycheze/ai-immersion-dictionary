@@ -13,6 +13,7 @@ venv/
 api_key.txt
 user_settings.json
 todo.md
+CLAUDE.md
 
 # IDE
 .vscode/
@@ -24,3 +25,5 @@ output.json
 
 # Tree output
 tree_output.txt
+
+**/.claude/settings.local.json

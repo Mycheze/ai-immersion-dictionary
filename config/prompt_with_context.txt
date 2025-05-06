@@ -1,0 +1,99 @@
+Generate a dictionary entry in JSON format where:  
+- Definitions are ALWAYS in [DEFINITION_LANGUAGE]  
+- Examples are ALWAYS in [TARGET_LANGUAGE]  
+- Translations (if needed) are in [DEFINITION_LANGUAGE]  
+
+The word to define is '[TARGET_WORD]' which appears in this sentence:
+
+"[SENTENCE_CONTEXT]"
+
+Use this sentence context to:
+1. Determine if '[TARGET_WORD]' is part of a multi-word expression
+2. Understand the specific usage/meaning in this context
+3. Include this sentence as one of the examples in your response
+4. Extract grammar details based on actual usage in the sentence
+
+### **JSON Structure (MUST MATCH EXACTLY)**  
+```json
+{
+    "metadata": {
+        "source_language": "[SOURCE_LANGUAGE]",
+        "target_language": "[TARGET_LANGUAGE]",
+        "definition_language": "[DEFINITION_LANGUAGE]",
+        "has_context": true,
+        "context_sentence": "[SENTENCE_CONTEXT]"
+    },
+    "headword": str,  // PRESERVE AS-IS including all words
+    "part_of_speech": str|list,
+    "meanings": [{
+        "definition": str,  // ALWAYS in [DEFINITION_LANGUAGE]
+        "grammar": {
+            "noun_type": str|null,  // e.g., "masculine", "feminine"
+            "verb_type": str|null,  // e.g., "transitive", "irregular"
+            "comparison": str|null  // e.g., "comparative", "superlative"
+        },
+        "examples": [{
+            "sentence": str,  // ALWAYS in [TARGET_LANGUAGE]
+            "translation": str|null,  // In [DEFINITION_LANGUAGE] if different
+            "is_context_sentence": bool  // True if this is the provided context
+        }]
+    }]
+}
+```
+
+Strict Rules
+
+    Definition Language:
+
+        Definitions must be in [DEFINITION_LANGUAGE] (no exceptions).
+
+        If [DEFINITION_LANGUAGE] = [TARGET_LANGUAGE], still use [DEFINITION_LANGUAGE].
+
+    Example Sentences:
+
+        Always in [TARGET_LANGUAGE].
+
+        Include a translation only if [DEFINITION_LANGUAGE] ≠ [TARGET_LANGUAGE].
+
+        ALWAYS include the provided context sentence as one of the examples with "is_context_sentence": true
+
+    Grammar Notes:
+
+        Only include if relevant (e.g., noun gender, verb conjugation).
+
+        Keep terminology simple (e.g., "feminine noun," not "noun of feminine grammatical gender").
+
+        Use the provided context sentence to accurately determine grammar properties.
+
+    Content Style:
+
+        Definitions: Short, clear, and natural (e.g., "a musical instrument with strings" not "a chordophone played with a bow").
+
+        Examples: Everyday usage (no poetic/literary unless explicitly requested).
+
+    Structural Integrity:
+
+        All keys must be present (use null for empty fields).
+
+        No extra keys, no missing keys.
+
+Special handling for multi-word expressions:
+    - If '[TARGET_WORD]' appears to be part of a multi-word expression in the context sentence, use the full expression as the headword
+    - Phrasal verbs (e.g., "go out with"): Maintain exact word order and particles
+    - Compound nouns (e.g., "coffee table"): Preserve spacing
+    - Separable verbs (e.g., "všímat si"): Keep all components
+
+Prohibited:
+
+❌ Definitions in the wrong language
+❌ Overly complex explanations
+❌ Missing/undefined JSON fields
+❌ Markdown, HTML, or comments
+❌ Omitting the context sentence from examples
+Language Settings:
+
+    Definition Language: [DEFINITION_LANGUAGE]
+    Target Language: [TARGET_LANGUAGE]
+    Source Language: [SOURCE_LANGUAGE]
+
+Output ONLY the JSON object. The word follows:

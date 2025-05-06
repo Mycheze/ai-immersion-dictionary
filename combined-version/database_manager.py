@@ -49,6 +49,7 @@ class DatabaseManager:
                     cursor.execute("DROP TABLE IF EXISTS meanings")
                     cursor.execute("DROP TABLE IF EXISTS entries")
                     cursor.execute("DROP TABLE IF EXISTS lemma_cache")
+                    cursor.execute("DROP TABLE IF EXISTS sentence_contexts")
             
             # Create entries table with correct constraint
             cursor.execute("""
@@ -59,6 +60,7 @@ class DatabaseManager:
                     source_language TEXT,
                     target_language TEXT,
                     definition_language TEXT,
+                    has_context BOOLEAN DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(headword, source_language, target_language, definition_language)
                 )
@@ -84,6 +86,7 @@ class DatabaseManager:
                     meaning_id INTEGER,
                     sentence TEXT,
                     translation TEXT,
+                    is_context_sentence BOOLEAN DEFAULT 0,
                     FOREIGN KEY(meaning_id) REFERENCES meanings(id) ON DELETE CASCADE
                 )
             """)
@@ -100,12 +103,25 @@ class DatabaseManager:
                 )
             """)
             
+            # Create sentence context table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sentence_contexts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entry_id INTEGER,
+                    sentence TEXT NOT NULL,
+                    selected_text TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(entry_id) REFERENCES entries(id) ON DELETE CASCADE
+                )
+            """)
+            
             # Create indexes for faster searching
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_headword ON entries(headword)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_language ON entries(source_language)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_target_language ON entries(target_language)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_definition_language ON entries(definition_language)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_lemma_word ON lemma_cache(word, target_language)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_entry_sentence ON sentence_contexts(entry_id)")
             
             # If we had backup data, restore it
             if 'backup_entries' in locals():
@@ -163,17 +179,25 @@ class DatabaseManager:
                         cursor.execute("ROLLBACK")
                         return existing_result[0]
                     
+                    # Check if the entry has context
+                    has_context = False
+                    context_sentence = None
+                    if metadata.get("has_context") and metadata.get("context_sentence"):
+                        has_context = True
+                        context_sentence = metadata.get("context_sentence")
+                    
                     # Insert new entry
                     cursor.execute("""
                         INSERT INTO entries 
-                        (headword, part_of_speech, source_language, target_language, definition_language)
-                        VALUES (?, ?, ?, ?, ?)
+                        (headword, part_of_speech, source_language, target_language, definition_language, has_context)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     """, (
                         entry.get("headword", ""),  # Ensure headword exists
                         json.dumps(entry.get("part_of_speech")) if isinstance(entry.get("part_of_speech"), list) else entry.get("part_of_speech"),
                         metadata["source_language"],
                         metadata["target_language"],
-                        metadata["definition_language"]
+                        metadata["definition_language"],
+                        1 if has_context else 0
                     ))
                     
                     entry_id = cursor.lastrowid
@@ -212,14 +236,19 @@ class DatabaseManager:
                                 print("Warning: example missing sentence, skipping")
                                 continue
                                 
+                            is_context = False
+                            if example.get("is_context_sentence") is True:
+                                is_context = True
+                                
                             cursor.execute("""
                                 INSERT INTO examples 
-                                (meaning_id, sentence, translation)
-                                VALUES (?, ?, ?)
+                                (meaning_id, sentence, translation, is_context_sentence)
+                                VALUES (?, ?, ?, ?)
                             """, (
                                 meaning_id,
                                 example["sentence"],
-                                example.get("translation")
+                                example.get("translation"),
+                                1 if is_context else 0
                             ))
                     
                     # Commit the transaction
@@ -342,10 +371,16 @@ class DatabaseManager:
             
             examples = []
             for example_row in example_rows:
-                examples.append({
+                example = {
                     "sentence": example_row[2],
                     "translation": example_row[3]
-                })
+                }
+                
+                # Check if this is a context sentence
+                if example_row[4] == 1:  # is_context_sentence column
+                    example["is_context_sentence"] = True
+                
+                examples.append(example)
             
             meanings.append({
                 "definition": meaning_row[2],
@@ -364,12 +399,33 @@ class DatabaseManager:
         except (json.JSONDecodeError, TypeError):
             pass  # Keep as string if not JSON
         
+        # Get context information
+        has_context = entry_row[6]  # has_context column (BOOLEAN)
+        
+        metadata = {
+            "source_language": entry_row[3],
+            "target_language": entry_row[4],
+            "definition_language": entry_row[5]
+        }
+        
+        # Add context info to metadata if present
+        if has_context:
+            metadata["has_context"] = True
+            
+            # Get context sentence from sentence_contexts table
+            cursor.execute("""
+                SELECT sentence FROM sentence_contexts 
+                WHERE entry_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (entry_id,))
+            
+            context_result = cursor.fetchone()
+            if context_result:
+                metadata["context_sentence"] = context_result[0]
+        
         entry = {
-            "metadata": {
-                "source_language": entry_row[3],
-                "target_language": entry_row[4],
-                "definition_language": entry_row[5]
-            },
+            "metadata": metadata,
             "headword": entry_row[1],
             "part_of_speech": part_of_speech,
             "meanings": meanings
@@ -434,7 +490,46 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM lemma_cache")
             conn.commit()
+    
+    def save_sentence_context(self, entry_id: int, sentence: str, selected_text: str) -> bool:
+        """Save a sentence context for an entry"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO sentence_contexts 
+                    (entry_id, sentence, selected_text)
+                    VALUES (?, ?, ?)
+                """, (entry_id, sentence, selected_text))
+                
+                conn.commit()
+                return True
+                
+        except sqlite3.Error as e:
+            print(f"Database error saving sentence context: {e}")
+            return False
             
+    def get_sentence_context(self, entry_id: int) -> Optional[Dict]:
+        """Get sentence context for an entry"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT sentence, selected_text FROM sentence_contexts 
+                WHERE entry_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (entry_id,))
+            
+            result = cursor.fetchone()
+            if result:
+                return {
+                    "sentence": result[0],
+                    "selected_text": result[1]
+                }
+            
+            return None
     def delete_entry(self, headword: str, source_lang: str = None, target_lang: str = None, definition_lang: str = None) -> bool:
         """Delete an entry from the database"""
         try:

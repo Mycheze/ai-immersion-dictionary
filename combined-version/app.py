@@ -46,7 +46,7 @@ class DictionaryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AI-Powered Immersion Dictionary")
-        self.root.geometry("900x760")
+        self.root.geometry("1200x1000")
         
         # Initialize database manager
         self.db_manager = DatabaseManager()
@@ -99,6 +99,9 @@ class DictionaryApp:
         # Create the search and entry panels
         self.create_search_panel()
         self.create_entry_display()
+        
+        # Create the sentence context panel
+        self.create_sentence_context_panel()
         
         # Create the bottom search bar for new entries
         self.create_search_bar()
@@ -154,6 +157,10 @@ class DictionaryApp:
         # Bottom panel for search bar
         self.bottom_panel = tk.Frame(self.main_container)
         self.bottom_panel.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=10)
+        
+        # Sentence context panel (between entry display and bottom search bar)
+        self.sentence_panel = tk.Frame(self.main_container)
+        self.sentence_panel.pack(side=tk.BOTTOM, fill=tk.X, before=self.bottom_panel, padx=5, pady=5)
     
     def create_search_panel(self):
         # Search box
@@ -235,12 +242,15 @@ class DictionaryApp:
         
         # Configure tags for formatting
         self.entry_display.tag_config("language_header", font=("Arial", 10), foreground="gray")
+        self.entry_display.tag_config("context_header", font=("Arial", 10, "bold"), foreground="#008800")  # Green for context
         self.entry_display.tag_config("headword", font=("Arial", 16, "bold"))
         self.entry_display.tag_config("pos", font=("Arial", 12, "italic"))
         self.entry_display.tag_config("definition", font=("Arial", 12, "bold"))
         self.entry_display.tag_config("grammar", font=("Arial", 10), foreground="gray")
         self.entry_display.tag_config("example_label", font=("Arial", 10, "italic"))
+        self.entry_display.tag_config("context_example_label", font=("Arial", 10, "italic"), foreground="#008800")  # Green for context examples
         self.entry_display.tag_config("example", font=("Arial", 12))
+        self.entry_display.tag_config("context_example", font=("Arial", 12), background="#f0fff0")  # Light green background for context examples
         self.entry_display.tag_config("translation", font=("Arial", 10, "italic"), foreground="blue")
         self.entry_display.tag_config("status", font=("Arial", 12), foreground="green")
         self.entry_display.tag_config("multiword_headword", font=("Arial", 16, "bold"), foreground="navy")
@@ -366,9 +376,15 @@ class DictionaryApp:
         
         # Display language information
         metadata = entry["metadata"]
+        
+        # Check if this is a context-based entry
+        has_context = metadata.get("has_context", False)
+        context_badge = " [Context-Aware]" if has_context else ""
+        
+        # Add a context badge to the header if entry is context-based
         self.entry_display.insert(tk.END, 
-            f"{metadata['source_language']} → {metadata['target_language']} (Definitions in {metadata['definition_language']})\n\n", 
-            "language_header")
+            f"{metadata['source_language']} → {metadata['target_language']} (Definitions in {metadata['definition_language']}){context_badge}\n\n", 
+            "language_header" if not has_context else "context_header")
         
         # Highlight multi-word headwords with a special tag
         headword = entry['headword']
@@ -396,15 +412,23 @@ class DictionaryApp:
             
             # Display examples with export buttons
             for j, example in enumerate(meaning.get('examples', [])):
-                self.entry_display.insert(tk.END, f"\n   Example:\n", "example_label")
+                # Check if this is a context sentence
+                is_context = example.get("is_context_sentence", False)
+                
+                # Use different styling for context examples
+                if is_context:
+                    self.entry_display.insert(tk.END, f"\n   Context Example:\n", "context_example_label")
+                else:
+                    self.entry_display.insert(tk.END, f"\n   Example:\n", "example_label")
                 
                 # Create a frame for example and export button
                 example_frame = tk.Frame(self.entry_display)
                 self.entry_display.window_create(tk.END, window=example_frame)
                 
-                # Example text
+                # Example text with different style for context examples
                 example_text = tk.Label(example_frame, text=f"   {example['sentence']}", 
-                                      font=("Arial", 12), wraplength=600, justify='left')
+                                      font=("Arial", 12), wraplength=600, justify='left',
+                                      background="#f0fff0" if is_context else "white")  # Light green background for context
                 example_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
                 
                 # Export button (📤 icon)
@@ -464,10 +488,11 @@ class DictionaryApp:
         custom_languages = set(self.load_custom_languages())
         removed_languages = set(self.load_removed_languages())
         
-        # Print debug info
-        print(f"Languages in database: {db_languages}")
-        print(f"Custom languages: {custom_languages}")
-        print(f"Removed languages: {removed_languages}")
+        # Reduce excessive logging - comment out debug prints
+        # Debug info can be re-enabled for troubleshooting if needed
+        # print(f"Languages in database: {db_languages}")
+        # print(f"Custom languages: {custom_languages}")
+        # print(f"Removed languages: {removed_languages}")
         
         # Combine all languages and remove the ones marked as removed
         all_languages = db_languages.union(custom_languages) - removed_languages
@@ -502,7 +527,8 @@ class DictionaryApp:
         target_languages = ["All"] + sorted(filtered_languages)
         definition_languages = sorted(filtered_languages)
         
-        print(f"Final languages shown: {filtered_languages}")
+        # Reduce excessive logging
+        # print(f"Final languages shown: {filtered_languages}")
         
         self.target_lang_dropdown["values"] = target_languages
         self.definition_lang_dropdown["values"] = definition_languages
@@ -544,11 +570,12 @@ class DictionaryApp:
         self.update_headword_list()
     
     def show_entry(self, event):
-        """Display the selected dictionary entry"""
+        """Display the selected dictionary entry triggered by user selection"""
         selection = self.headword_list.curselection()
         if not selection:
             return
         
+        # Get the selected word from the listbox
         selected_word = self.headword_list.get(selection[0])
         
         # Find the exact entry that matches current filter settings
@@ -589,8 +616,19 @@ class DictionaryApp:
         # Clear the search field
         self.new_word_entry.delete(0, tk.END)
         
-        # Show status
-        self.show_status_message(f"Processing: '{word}'...")
+        # Check if we have active sentence context
+        sentence_context = None
+        if hasattr(self, 'context_active') and self.context_active and self.current_sentence_context:
+            sentence_context = self.current_sentence_context
+            context_status = "with context"
+            # Update indicator to show active context
+            self.set_context_indicator_color("blue")
+        else:
+            context_status = ""
+        
+        # Show status with context indication
+        status_msg = f"Processing: '{word}'{' ' + context_status if context_status else ''}..."
+        self.show_status_message(status_msg)
         self.root.update()
         
         # Get current language settings
@@ -598,10 +636,10 @@ class DictionaryApp:
         source_lang = self.source_lang_var.get()
         definition_lang = self.definition_lang_var.get()
         
-        # Step 1: Get lemma (now preserves multi-word expressions)
-        lemma = self.dictionary_engine.get_lemma(word)
+        # Step 1: Get lemma (using context if available)
+        lemma = self.dictionary_engine.get_lemma(word, sentence_context)
         
-        # Step 2: Check if word exists
+        # Step 2: Check if word/lemma exists (prioritize exact match first)
         existing_entry = self.db_manager.get_entry_by_headword(
             word, 
             source_lang=source_lang,
@@ -610,8 +648,15 @@ class DictionaryApp:
         )
         
         if existing_entry:
+            # Update current_entry directly to ensure it's in sync
+            self.current_entry = existing_entry
             self.display_entry(existing_entry)
             self.select_and_show_headword(word.lower())
+            
+            # Clear the sentence context window after finding the existing entry
+            if sentence_context:
+                self.clear_sentence_context()
+                
             return
         
         # Step 3: Check if lemma exists
@@ -623,30 +668,61 @@ class DictionaryApp:
         )
         
         if existing_entry:
+            # Update current_entry directly to ensure it's in sync
+            self.current_entry = existing_entry
             self.display_entry(existing_entry)
             self.select_and_show_headword(lemma.lower())
+            
+            # Clear the sentence context window after finding the existing lemma
+            if sentence_context:
+                self.clear_sentence_context()
         else:
-            # Create new entry
-            new_entry = self.dictionary_engine.create_new_entry(lemma, target_lang, source_lang)
+            # Create new entry with context if available
+            new_entry = self.dictionary_engine.create_new_entry(
+                lemma, 
+                target_lang, 
+                source_lang, 
+                sentence_context
+            )
             
             if new_entry:
                 entry_id = self.db_manager.add_entry(new_entry)
                 if entry_id:
+                    # First update current_entry to ensure it's set correctly before reloading data
+                    self.current_entry = new_entry
+                    
+                    # If we had sentence context, save it in the database
+                    if sentence_context:
+                        self.db_manager.save_sentence_context(entry_id, sentence_context, word)
+                        # Clear the sentence context window after creating card successfully
+                        self.clear_sentence_context()
+                    
                     self.reload_data()
                     self.display_entry(new_entry)
                     self.select_and_show_headword(lemma.lower())
                 else:
                     self.show_status_message(f"Error: Failed to save entry for '{lemma}'")
+                    
+                    # Set context indicator back to red if context was active but failed
+                    if sentence_context:
+                        self.set_context_indicator_color("red")
             else:
                 self.show_status_message(f"Error: Failed to create entry for '{lemma}'")
+                
+                # Set context indicator back to red if context was active but failed
+                if sentence_context:
+                    self.set_context_indicator_color("red")
 
     def select_and_show_headword(self, headword: str):
-        """Helper method to find and select a headword in the listbox"""
+        """Helper method to find and select a headword in the listbox and update current_entry"""
         for i in range(self.headword_list.size()):
             if self.headword_list.get(i).lower() == headword:
                 self.headword_list.selection_clear(0, tk.END)
                 self.headword_list.selection_set(i)
                 self.headword_list.see(i)
+                
+                # We don't call force_show_entry here to avoid potential recursive loops
+                # Instead we ensure current_entry is already updated by the calling functions
                 break
     
     def migrate_json_data(self):
@@ -1083,18 +1159,168 @@ class DictionaryApp:
         """Hide admin buttons when ALT key is released"""
         if hasattr(self, 'admin_buttons_frame'):
             self.admin_buttons_frame.pack_forget()
+            
+    def create_sentence_context_panel(self):
+        """Create a panel for sentence context input"""
+        # Create labeled frame with a border
+        self.sentence_frame = ttk.LabelFrame(self.sentence_panel, text="Sentence Context")
+        self.sentence_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Top bar with label and character counter
+        top_bar = tk.Frame(self.sentence_frame)
+        top_bar.pack(fill=tk.X, padx=5, pady=(3, 0))
+        
+        self.char_count_var = tk.StringVar(value="0/150")
+        ttk.Label(top_bar, text="Enter/paste a sentence (max 150 chars):").pack(side=tk.LEFT)
+        ttk.Label(top_bar, textvariable=self.char_count_var).pack(side=tk.RIGHT)
+        
+        # Middle section with text entry and scrollbar
+        text_frame = tk.Frame(self.sentence_frame)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=3)
+        
+        # Create text widget for sentence input with scrollbar
+        self.sentence_text = tk.Text(text_frame, height=2, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(text_frame, command=self.sentence_text.yview)
+        self.sentence_text.config(yscrollcommand=scrollbar.set)
+        
+        self.sentence_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bottom bar with buttons
+        button_bar = tk.Frame(self.sentence_frame)
+        button_bar.pack(fill=tk.X, padx=5, pady=(0, 5))
+        
+        # Instruction label
+        ttk.Label(button_bar, text="Double-click or select text to lookup:", font=("Arial", 8)).pack(side=tk.LEFT)
+        
+        # Clear button on the right
+        self.clear_btn = ttk.Button(button_bar, text="Clear", width=8, command=self.clear_sentence_context)
+        self.clear_btn.pack(side=tk.RIGHT, padx=5)
+        
+        # Context status indicator (dot)
+        self.context_indicator = tk.Canvas(button_bar, width=16, height=16, bg="#f0f0f0", highlightthickness=0)
+        self.context_indicator.pack(side=tk.RIGHT, padx=5)
+        self.context_indicator.create_oval(4, 4, 12, 12, fill="gray", outline="")
+        
+        # Bind events
+        self.sentence_text.bind("<KeyRelease>", self.update_char_count)
+        self.sentence_text.bind("<Double-Button-1>", self.on_word_double_click)
+        self.sentence_text.bind("<<Selection>>", self.on_text_selection)
+        
+        # Initialize instance variables
+        self.current_sentence_context = None
+        self.context_active = False
+        
+    def update_char_count(self, event=None):
+        """Update the character count display and limit input"""
+        text = self.sentence_text.get("1.0", "end-1c")
+        count = len(text)
+        
+        # Update the count display
+        self.char_count_var.set(f"{count}/150")
+        
+        # Limit to 150 characters
+        if count > 150:
+            # Delete the excess characters
+            self.sentence_text.delete("1.0 + 150 chars", "end-1c")
+            # Update the count again
+            self.char_count_var.set("150/150")
+            
+        # Store current context
+        self.current_sentence_context = self.sentence_text.get("1.0", "end-1c").strip()
+        
+    def clear_sentence_context(self):
+        """Clear the sentence context field"""
+        self.sentence_text.delete("1.0", tk.END)
+        self.current_sentence_context = None
+        self.context_active = False
+        self.update_char_count()
+        self.set_context_indicator_color("gray")
+        
+    def on_word_double_click(self, event):
+        """Handle double-click in the sentence to select a word"""
+        try:
+            # Get position at click
+            index = self.sentence_text.index(f"@{event.x},{event.y}")
+            
+            # Get the line and character offset
+            line, char = map(int, index.split('.'))
+            
+            # Get the content of the current line
+            line_content = self.sentence_text.get(f"{line}.0", f"{line}.end")
+            
+            # Find word boundaries
+            left = right = char
+            
+            # Find the start of the word
+            while left > 0 and line_content[left-1].isalnum() or line_content[left-1] in "-_'":
+                left -= 1
+                
+            # Find the end of the word
+            while right < len(line_content) and (line_content[right].isalnum() or line_content[right] in "-_'"):
+                right += 1
+                
+            # Select the word
+            self.sentence_text.tag_remove(tk.SEL, "1.0", tk.END)
+            self.sentence_text.tag_add(tk.SEL, f"{line}.{left}", f"{line}.{right}")
+            
+            # Get the selected word
+            selected_word = line_content[left:right]
+            
+            if selected_word:
+                # Update the new word entry with the selected word
+                self.new_word_var.set(selected_word)
+                
+                # Set context as active
+                self.context_active = True
+                self.set_context_indicator_color("green")
+                
+                # Focus on the search button
+                self.search_btn.focus_set()
+                
+        except Exception as e:
+            print(f"Error handling double-click: {e}")
+            
+    def on_text_selection(self, event=None):
+        """Handle manual text selection in the sentence"""
+        try:
+            # Check if there is a selection
+            if self.sentence_text.tag_ranges(tk.SEL):
+                # Get the selected text
+                selected_text = self.sentence_text.get(tk.SEL_FIRST, tk.SEL_LAST)
+                
+                if selected_text and len(selected_text.strip()) > 0:
+                    # Update the new word entry with the selected text
+                    self.new_word_var.set(selected_text)
+                    
+                    # Set context as active
+                    self.context_active = True
+                    self.set_context_indicator_color("green")
+                    
+                    # Focus on the search button
+                    self.search_btn.focus_set()
+            
+        except Exception as e:
+            print(f"Error handling text selection: {e}")
+            
+    def set_context_indicator_color(self, color):
+        """Update the context indicator color"""
+        self.context_indicator.delete("all")
+        self.context_indicator.create_oval(4, 4, 12, 12, fill=color, outline="")
     
     def toggle_clipboard_monitoring(self):
         """Toggle clipboard monitoring on/off"""
         is_enabled = self.clipboard_monitor_var.get()
         
-        print(f"Toggle clipboard monitoring: {is_enabled}")
+        # Reduce debug logging
+        # print(f"Toggle clipboard monitoring: {is_enabled}")
         
         if is_enabled:
             # If we're about to enable monitoring, force a single clipboard check right away
             try:
                 current_clip = pyperclip.paste()
-                print(f"Current clipboard content: '{current_clip}'")
+                # Reduce debug logging
+                # print(f"Current clipboard content: '{current_clip}'")
                 if current_clip.strip():
                     # Update the field with current clipboard content immediately
                     self.update_entry_from_clipboard(current_clip)
@@ -1102,14 +1328,16 @@ class DictionaryApp:
                 print(f"Error accessing clipboard during toggle: {e}")
             
             self.start_clipboard_monitoring()
-            print("Clipboard monitoring enabled")
+            # Reduce console output, keep status message for user
+            # print("Clipboard monitoring enabled")
             
             # Add message to entry field if it's empty
             if not self.new_word_var.get().strip():
                 self.show_status_message("Clipboard monitoring enabled. Copy text to automatically fill the search box.")
         else:
             self.stop_clipboard_monitoring()
-            print("Clipboard monitoring disabled")
+            # Reduce console output, keep status message for user
+            # print("Clipboard monitoring disabled")
             self.show_status_message("Clipboard monitoring disabled")
             
         # Save the setting
@@ -1117,22 +1345,27 @@ class DictionaryApp:
     
     def start_clipboard_monitoring(self):
         """Start the clipboard monitoring process"""
-        if not self.clipboard_monitoring:
-            self.clipboard_monitoring = True
-            # Get initial clipboard content
-            try:
-                self.last_clipboard_content = pyperclip.paste()
-                print(f"Initial clipboard content: '{self.last_clipboard_content}'")
-            except Exception as e:
-                print(f"Error accessing clipboard: {e}")
-                self.last_clipboard_content = ""
-            
-            # Add debug output to the status area
-            self.show_status_message(f"Clipboard monitoring enabled. Checking every {self.clipboard_check_interval/1000} seconds.")
-            self.root.update()
-            
-            # Start the periodic clipboard check
-            self.check_clipboard()
+        # First ensure any existing monitoring is stopped to prevent multiple timers
+        self.stop_clipboard_monitoring()
+        
+        # Then start new monitoring
+        self.clipboard_monitoring = True
+        
+        # Get initial clipboard content
+        try:
+            self.last_clipboard_content = pyperclip.paste()
+            # Reduce debug output
+            # print(f"Initial clipboard content: '{self.last_clipboard_content}'")
+        except Exception as e:
+            print(f"Error accessing clipboard: {e}")
+            self.last_clipboard_content = ""
+        
+        # Add info to the status area
+        self.show_status_message(f"Clipboard monitoring enabled. Checking every {self.clipboard_check_interval/1000} seconds.")
+        self.root.update()
+        
+        # Start the periodic clipboard check
+        self.check_clipboard()
             
     def stop_clipboard_monitoring(self):
         """Stop clipboard monitoring"""
@@ -1147,8 +1380,8 @@ class DictionaryApp:
             # Get current clipboard content
             clipboard_content = pyperclip.paste()
             
-            # Debug print for every check
-            print(f"Clipboard check - Current: '{clipboard_content}', Last: '{self.last_clipboard_content}'")
+            # Remove excessive debug printing
+            # Only log when content actually changes
             
             # If content has changed and isn't empty
             if clipboard_content != self.last_clipboard_content and clipboard_content.strip():
@@ -1168,7 +1401,8 @@ class DictionaryApp:
         
         # ALWAYS schedule the next check, regardless of what happened above
         # This ensures continuous monitoring until explicitly disabled
-        self.root.after(self.clipboard_check_interval, self.check_clipboard)
+        if self.clipboard_monitoring:  # Double-check flag to prevent multiple timers
+            self.root.after(self.clipboard_check_interval, self.check_clipboard)
     
     def update_entry_from_clipboard(self, content):
         """Update the entry box with clipboard content"""
@@ -1194,11 +1428,11 @@ class DictionaryApp:
         headword = self.current_entry["headword"]
         metadata = self.current_entry["metadata"]
         
-        # Print debug info
-        print(f"Attempting to delete entry: '{headword}'")
-        print(f"Source language: {metadata['source_language']}")
-        print(f"Target language: {metadata['target_language']}")
-        print(f"Definition language: {metadata['definition_language']}")
+        # Reduce debug info
+        # print(f"Attempting to delete entry: '{headword}'")
+        # print(f"Source language: {metadata['source_language']}")
+        # print(f"Target language: {metadata['target_language']}")
+        # print(f"Definition language: {metadata['definition_language']}")
         
         # Ask for confirmation
         confirm = tk.messagebox.askyesno(
@@ -1218,7 +1452,7 @@ class DictionaryApp:
         )
         
         if success:
-            print(f"Successfully deleted entry '{headword}' from database")
+            # print(f"Successfully deleted entry '{headword}' from database")
             
             # Clear the current entry
             self.current_entry = None
@@ -1235,17 +1469,15 @@ class DictionaryApp:
             # Reload data from the database
             self.reload_data()
             
-            # Manually search to ensure entry is no longer in filtered data
-            found = False
-            for entry in self.filtered_data:
-                if entry["headword"] == headword:
-                    found = True
-                    break
-                    
-            if found:
-                print(f"WARNING: Entry '{headword}' still found in filtered data after deletion")
-            else:
-                print(f"Confirmed: Entry '{headword}' no longer in filtered data")
+            # Select the first item in the list if there are any entries
+            if self.headword_list.size() > 0:
+                self.headword_list.selection_clear(0, tk.END)
+                self.headword_list.selection_set(0)
+                self.headword_list.see(0)
+                # Trigger selection event to update current_entry
+                event = tk.Event()
+                event.widget = self.headword_list
+                self.show_entry(event)
         else:
             self.show_status_message(f"Failed to delete entry '{headword}'.")
     
@@ -1258,11 +1490,11 @@ class DictionaryApp:
         headword = self.current_entry["headword"]
         metadata = self.current_entry["metadata"]
         
-        # Print debug info
-        print(f"Attempting to regenerate entry: '{headword}'")
-        print(f"Source language: {metadata['source_language']}")
-        print(f"Target language: {metadata['target_language']}")
-        print(f"Definition language: {metadata['definition_language']}")
+        # Reduce debug output 
+        # print(f"Attempting to regenerate entry: '{headword}'")
+        # print(f"Source language: {metadata['source_language']}")
+        # print(f"Target language: {metadata['target_language']}")
+        # print(f"Definition language: {metadata['definition_language']}")
         
         # Ask for confirmation
         confirm = tk.messagebox.askyesno(
@@ -1296,8 +1528,6 @@ class DictionaryApp:
         )
         
         if new_entry:
-            print(f"Successfully regenerated entry '{headword}'")
-            
             # Update the current entry
             self.current_entry = new_entry
             
@@ -1310,9 +1540,21 @@ class DictionaryApp:
             # Reload data from the database
             self.reload_data()
             
-            # Update the headword list and select the entry
+            # Update the headword list
             self.update_headword_list()
-            self.select_and_show_headword(headword.lower())
+            
+            # Find and select the headword in the list
+            for i in range(self.headword_list.size()):
+                if self.headword_list.get(i).lower() == headword.lower():
+                    self.headword_list.selection_clear(0, tk.END)
+                    self.headword_list.selection_set(i)
+                    self.headword_list.see(i)
+                    
+                    # Use event to trigger show_entry
+                    event = tk.Event()
+                    event.widget = self.headword_list
+                    self.show_entry(event)
+                    break
             
             # Show success message
             self.show_status_message(f"Entry '{headword}' regenerated successfully.")
