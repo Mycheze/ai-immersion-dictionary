@@ -25,10 +25,13 @@ class UserSettings:
     
     def get_default_settings(self):
         """Return default settings"""
+        # Set default definition language
+        default_definition_lang = 'English'
+        
         return {
             'target_language': 'Czech',  # Language being learned
-            'source_language': 'English',  # Base language of the learner
-            'definition_language': 'English',  # Language for definitions
+            'source_language': default_definition_lang,  # Base language of the learner (same as definition language)
+            'definition_language': default_definition_lang,  # Language for definitions
             
             # Anki integration settings
             'anki_enabled': False,
@@ -77,6 +80,13 @@ class UserSettings:
     
     def update_settings(self, new_settings):
         """Update settings with new values"""
+        # If definition_language is being updated, ensure source_language matches
+        if 'definition_language' in new_settings and 'source_language' not in new_settings:
+            new_settings['source_language'] = new_settings['definition_language']
+        # If source_language is being updated, ensure definition_language matches
+        elif 'source_language' in new_settings and 'definition_language' not in new_settings:
+            new_settings['definition_language'] = new_settings['source_language']
+            
         self.settings.update(new_settings)
         self.save_settings()
     

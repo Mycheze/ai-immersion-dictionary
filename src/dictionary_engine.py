@@ -264,10 +264,19 @@ class DictionaryEngine:
             
             # Create settings with language overrides if provided
             entry_settings = self.settings.copy()
+            
+            # Apply target language override if provided
             if target_lang:
                 entry_settings['TARGET_LANGUAGE'] = target_lang
+                
+            # Handle source and definition language overrides
             if source_lang:
+                # If source_lang is provided, set both source and definition language to the same value
                 entry_settings['SOURCE_LANGUAGE'] = source_lang
+                entry_settings['DEFINITION_LANGUAGE'] = source_lang
+            elif 'DEFINITION_LANGUAGE' in entry_settings:
+                # Otherwise ensure source language matches definition language
+                entry_settings['SOURCE_LANGUAGE'] = entry_settings['DEFINITION_LANGUAGE']
             
             # Process the prompt template
             system_prompt = self.process_prompt(raw_prompt, entry_settings)
@@ -344,10 +353,19 @@ class DictionaryEngine:
             
             # Create settings with language overrides if provided
             entry_settings = self.settings.copy()
+            
+            # Apply target language override if provided
             if target_lang:
                 entry_settings['TARGET_LANGUAGE'] = target_lang
+                
+            # Handle source and definition language overrides
             if source_lang:
+                # If source_lang is provided, set both source and definition language to the same value
                 entry_settings['SOURCE_LANGUAGE'] = source_lang
+                entry_settings['DEFINITION_LANGUAGE'] = source_lang
+            elif 'DEFINITION_LANGUAGE' in entry_settings:
+                # Otherwise ensure source language matches definition language
+                entry_settings['SOURCE_LANGUAGE'] = entry_settings['DEFINITION_LANGUAGE']
                 
             # Add sentence context to settings
             entry_settings['TARGET_WORD'] = word
@@ -519,6 +537,12 @@ class DictionaryEngine:
         try:
             print(f"Starting regeneration of entry: '{headword}'")
             
+            # Make sure source_lang and definition_lang are the same
+            if source_lang is None and definition_lang is not None:
+                source_lang = definition_lang
+            elif definition_lang is None and source_lang is not None:
+                definition_lang = source_lang
+            
             # Delete the existing entry first, if it exists
             original_entry = self.db_manager.get_entry_by_headword(
                 headword,
@@ -558,7 +582,7 @@ class DictionaryEngine:
                 
             print(f"Successfully deleted old entry, creating new entry for '{headword}'")
             
-            # Create the new entry with variation
+            # Create the new entry with variation - source_lang will be used for both source and definition languages
             new_entry = self.create_new_entry(headword, target_lang, source_lang, variation_prompt=system_messages)
             
             if not new_entry:

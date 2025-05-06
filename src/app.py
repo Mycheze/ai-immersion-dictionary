@@ -190,6 +190,7 @@ class DictionaryApp:
         self.target_lang_dropdown.bind("<<ComboboxSelected>>", self.on_language_change)
         
         # Source language (base language) - hidden but kept for internal use
+        # Initialize with "English" for now - will be updated in apply_saved_settings
         self.source_lang_var = tk.StringVar(value="English")
         
         # Definition language dropdown
@@ -315,6 +316,9 @@ class DictionaryApp:
         # Set definition language
         self.definition_lang_var.set(definition_lang)
         
+        # Set source language equal to definition language
+        self.source_lang_var.set(definition_lang)
+        
         # Set clipboard monitoring state if it was saved
         if hasattr(self, 'clipboard_monitor_var'):
             clipboard_enabled = settings.get('clipboard_monitoring', False)
@@ -349,11 +353,14 @@ class DictionaryApp:
         target_lang = self.target_lang_var.get()
         definition_lang = self.definition_lang_var.get()
         
+        # Update source_lang_var to match definition_lang
+        self.source_lang_var.set(definition_lang)
+        
         # Update user settings
         self.user_settings.update_settings({
             'target_language': target_lang,
             'definition_language': definition_lang,
-            'source_language': 'English'  # Keep base language as English for now
+            'source_language': definition_lang  # Set source language equal to definition language
         })
         
         # Update the dictionary engine's settings

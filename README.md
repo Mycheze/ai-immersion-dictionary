@@ -31,12 +31,13 @@ An AI-powered dictionary application to help language learners with personalized
 
 ### Step 1: Clone the Repository
 
-```bash
-git clone https://github.com/yourusername/DeepDict.git
-cd DeepDict
-```
+Download the ZIP file with the "Code" button above. Extract the folder and move the folder to somewhere you won't delete it.
 
 ### Step 2: Create a Virtual Environment
+
+Open a terminal or command prompt and make sure you're in the right folder! This can be done with `cd` or by right-clicking in the right folder and clicking "open in terminal."
+
+Then run these commands:
 
 **Linux/macOS:**
 ```bash
@@ -51,6 +52,8 @@ venv\Scripts\activate
 ```
 
 ### Step 3: Install Dependencies
+
+*Note*: If you have python3 or pip3, all python or pip commands will need a 3 added.
 
 ```bash
 pip install -r requirements.txt

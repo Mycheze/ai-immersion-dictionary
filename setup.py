@@ -120,6 +120,62 @@ def test_dependencies():
         print("Please run: pip install -r requirements.txt")
         return False
 
+def create_desktop_shortcut():
+    """Create desktop shortcut for Linux users."""
+    if platform.system() != "Linux":
+        return False
+    
+    try:
+        # Get root directory
+        root_dir = Path(__file__).parent.absolute()
+        
+        # Create .desktop file content
+        desktop_content = f"""[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Deep Dict
+Comment=Immersion Learning Dictionary
+Exec=/bin/bash -c "{root_dir}/scripts/launch_dictionary.sh"
+Terminal=true
+StartupNotify=true
+Categories=Education;Utility;
+Path={root_dir}
+"""
+
+        # Get user's desktop directory
+        desktop_dir = Path.home() / "Desktop"
+        if not desktop_dir.exists():
+            desktop_dir = Path.home() / "Escritorio"  # Spanish
+            if not desktop_dir.exists():
+                desktop_dir = Path.home() / "Bureau"  # French
+                if not desktop_dir.exists():
+                    print("⚠ Could not find desktop directory, using home directory instead")
+                    desktop_dir = Path.home()
+        
+        # Create the desktop file
+        desktop_file = desktop_dir / "DeepDict.desktop"
+        with desktop_file.open('w') as f:
+            f.write(desktop_content)
+        
+        # Make it executable
+        desktop_file.chmod(0o755)
+        
+        # Alternatively, install to applications directory for all users
+        apps_dir = Path('/usr/share/applications')
+        if apps_dir.exists() and os.access(str(apps_dir), os.W_OK):
+            try:
+                with (apps_dir / "DeepDict.desktop").open('w') as f:
+                    f.write(desktop_content)
+                print("✓ Desktop shortcut installed system-wide")
+            except PermissionError:
+                print("⚠ Could not install system-wide shortcut (requires sudo)")
+        
+        print(f"✓ Desktop shortcut created at: {desktop_file}")
+        return True
+    except Exception as e:
+        print(f"⚠ Error creating desktop shortcut: {str(e)}")
+        return False
+
 def main():
     """Main setup function."""
     print("=" * 60)
@@ -174,6 +230,12 @@ def main():
     
     # Create default user settings if needed
     create_default_user_settings()
+    
+    # Create desktop shortcut for Linux
+    if platform.system() == "Linux":
+        create_shortcut = input("Create desktop shortcut? (y/n): ").lower() == 'y'
+        if create_shortcut:
+            create_desktop_shortcut()
     
     print("\nSetup Complete")
     print("=" * 60)
