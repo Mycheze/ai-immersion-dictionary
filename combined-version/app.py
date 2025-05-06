@@ -107,31 +107,31 @@ class DictionaryApp:
         self.create_search_bar()
         
         # Create status bar
-        self.create_status_bar()
+        # self.create_status_bar()
         
         # Make sure the bottom panel is visible
         self.bottom_panel.update()
 
-    def create_status_bar(self):
-        """Create a status bar to show current language settings"""
-        self.status_bar = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.status_label = tk.Label(self.status_bar, text="", anchor=tk.W, padx=5)
-        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        # Update status immediately
-        self.update_status_bar()
-
-    def update_status_bar(self):
-        """Update the status bar with current language settings"""
-        if hasattr(self, 'status_label'):
-            target_lang = self.target_lang_var.get()
-            definition_lang = self.definition_lang_var.get()
-            source_lang = self.source_lang_var.get()
-            
-            status_text = f"Learning: {target_lang} | Definitions: {definition_lang}"
-            self.status_label.config(text=status_text)
+#    def create_status_bar(self):
+#        """Create a status bar to show current language settings"""
+#        self.status_bar = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
+#        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+#        
+#        self.status_label = tk.Label(self.status_bar, text="", anchor=tk.W, padx=5)
+#        self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+#        
+#        # Update status immediately
+#        self.update_status_bar()
+#
+#    def update_status_bar(self):
+#        """Update the status bar with current language settings"""
+#        if hasattr(self, 'status_label'):
+#            target_lang = self.target_lang_var.get()
+#            definition_lang = self.definition_lang_var.get()
+#            source_lang = self.source_lang_var.get()
+#            
+#            status_text = f"Learning: {target_lang} | Definitions: {definition_lang}"
+#            self.status_label.config(text=status_text)
     
     def create_frames(self):
         # Main container frame to manage layout
@@ -361,7 +361,7 @@ class DictionaryApp:
         self.dictionary_engine.settings = engine_settings
         
         # Update status bar
-        self.update_status_bar()
+        # self.update_status_bar()
         
         # Update the hint label
         self.update_hint_label()
