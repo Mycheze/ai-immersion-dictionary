@@ -1,4 +1,4 @@
-# AI-Powered Language Dictionary
+# DeepDict - AI-Powered Language Dictionary
 
 An AI-powered dictionary application to help language learners with personalized entries, lemmatization, and multiple language support.
 
@@ -7,50 +7,145 @@ An AI-powered dictionary application to help language learners with personalized
 - AI-powered dictionary entry creation using DeepSeek API
 - Multi-language support with customizable language preferences
 - Intelligent lemmatization with caching
+- Sentence context analysis for more accurate definitions
 - SQLite database with efficient search and filtering
 - User-friendly Tkinter GUI
-- Customizable language settings
+- Anki flashcard integration for spaced repetition learning
+- Clipboard monitoring for quick lookups
 
 ## Tech Stack
 
 - Python 3.x
 - Tkinter for GUI
 - SQLite for database
-- OpenAI/DeepSeek API for AI processing
-- JSON file handling
+- DeepSeek API for AI processing
+- JSON file handling for configuration
 
-## Quick Start
+## Installation
 
-1. Clone the repository
-2. Create virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-3. Install dependencies:
-    ```bash
-    pip install -r requirements.txt
-    ```
-4. Set up API key:
-    ```bash
-    cp .env.example api_key.txt
-    # Edit api_key.txt with your API key
-    ```
-5. Run the application
-    ```bash
-    ./launchdict.sh
-    ```
-## Project Structure
+### Prerequisites
 
-- /config - Configuration files and prompts
-- /data - Database and data files
-- /docs - Documentation
-- /tests - Unit tests
-- /deprecated - Legacy code
+- Python 3.6 or higher
+- DeepSeek API key (get one at https://platform.deepseek.com/)
+- On Linux, you may need xclip or xsel for clipboard functionality
+
+### Step 1: Clone the Repository
+
+```bash
+git clone https://github.com/yourusername/DeepDict.git
+cd DeepDict
+```
+
+### Step 2: Create a Virtual Environment
+
+**Linux/macOS:**
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+**Windows:**
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+### Step 3: Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Step 4: Run the Setup Script
+
+This will prompt for your DeepSeek API key and set up necessary directories:
+
+```bash
+python setup.py
+```
+
+### Step 5: Launch the Application
+
+**Linux/macOS:**
+```bash
+./scripts/launch_dictionary.sh
+```
+
+**Windows:**
+```cmd
+scripts\launch_dictionary.bat
+```
+
+## Usage
+
+### Adding New Words
+
+1. Enter a word in the bottom search box and click "Search" or press Enter
+2. The application will look up the word and display its definition
+3. Use the language filters on the left to select your target language and definition language
+
+### Context-Based Lookups
+
+1. Paste a sentence into the context area
+2. Double-click or select a word in the sentence
+3. Click "Search" to look up the word with contextual understanding
+
+### Clipboard Monitoring
+
+1. Enable "clipboard monitoring" in the bottom panel
+2. Copy any text to your clipboard
+3. The application will automatically populate the search box with the copied text
+
+### Anki Integration
+
+1. Click the "⚙️ Anki Config" button to configure Anki integration
+2. Ensure AnkiConnect plugin is installed in Anki
+3. Use the export button (📤) next to examples to create flashcards
 
 ## Configuration
+
 The application uses JSON-based configuration for user settings:
 
-- target_language - Language you're learning
-- source_language - Your native language
-- definition_language - Language for definitions
+- `target_language` - Language you're learning
+- `source_language` - Your native language
+- `definition_language` - Language for definitions
+- `custom_languages` - Custom languages you've added
+- `anki_enabled` - Whether Anki integration is enabled
+
+## Project Structure
+
+- `/src` - Main application code
+- `/config` - Configuration files and prompts
+- `/data` - Database and data files (created automatically)
+- `/docs` - Documentation
+- `/scripts` - Launch scripts for different platforms
+- `/tests` - Unit tests
+
+## Troubleshooting
+
+### API Key Issues
+
+If you encounter API key errors:
+1. Run `python setup.py` again to reconfigure your API key
+2. Ensure your DeepSeek API key has sufficient credits
+
+### Clipboard Issues on Linux
+
+If clipboard monitoring doesn't work on Linux:
+1. Install xclip: `sudo apt-get install xclip`
+2. Or install xsel: `sudo apt-get install xsel`
+
+### Database Issues
+
+If you encounter database errors:
+1. Check that the `data` directory exists and is writable
+2. Delete the database file (`data/dictionary.db`) and restart to rebuild it
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- DeepSeek for providing the API
+- Contributors to the project
