@@ -4,13 +4,16 @@ import sys
 import json
 import getpass
 import re
+import platform
 from pathlib import Path
 
 def create_directory(dir_path):
     """Create directory if it doesn't exist."""
     try:
-        os.makedirs(dir_path, exist_ok=True)
-        print(f"✓ Ensured directory exists: {dir_path}")
+        # Convert to Path object if it's a string
+        path = Path(dir_path) if isinstance(dir_path, str) else dir_path
+        path.mkdir(parents=True, exist_ok=True)
+        print(f"✓ Ensured directory exists: {path}")
         return True
     except Exception as e:
         print(f"✗ Error creating directory {dir_path}: {str(e)}")
@@ -19,12 +22,25 @@ def create_directory(dir_path):
 def save_api_key(api_key, filename="api_key.txt"):
     """Save API key to file."""
     try:
-        with open(filename, 'w') as f:
+        # Convert to Path object if it's a string
+        path = Path(filename) if isinstance(filename, str) else filename
+        
+        with path.open('w') as f:
             f.write(api_key.strip())
         
         # Set appropriate permissions (readable only by the user)
-        os.chmod(filename, 0o600)
-        print(f"✓ API key saved to {filename}")
+        # This works on Unix-like systems; on Windows we do what we can
+        if platform.system() != "Windows":
+            path.chmod(0o600)
+        else:
+            # On Windows, we can't set the same permissions, but we can try to make it hidden
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(str(path), 2)  # 2 = FILE_ATTRIBUTE_HIDDEN
+            except Exception:
+                pass  # Silently ignore if we can't set Windows file attributes
+                
+        print(f"✓ API key saved to {path}")
         return True
     except Exception as e:
         print(f"✗ Error saving API key: {str(e)}")
@@ -38,9 +54,11 @@ def validate_api_key(api_key):
 
 def create_default_user_settings():
     """Create default user_settings.json if it doesn't exist."""
-    settings_file = "user_settings.json"
+    # Get the root directory
+    root_dir = Path(__file__).parent.absolute()
+    settings_file = root_dir / "user_settings.json"
     
-    if os.path.exists(settings_file):
+    if settings_file.exists():
         print(f"✓ User settings file already exists: {settings_file}")
         return True
     
@@ -75,7 +93,7 @@ def create_default_user_settings():
     }
     
     try:
-        with open(settings_file, 'w', encoding='utf-8') as f:
+        with settings_file.open('w', encoding='utf-8') as f:
             json.dump(default_settings, f, indent=2)
         print(f"✓ Created default user settings file: {settings_file}")
         return True
@@ -108,8 +126,11 @@ def main():
     print("DeepDict Setup")
     print("=" * 60)
     
+    # Get root directory
+    root_dir = Path(__file__).parent.absolute()
+    
     # Create required directories
-    dirs_to_create = ["data", "config"]
+    dirs_to_create = [root_dir / "data", root_dir / "config"]
     dirs_created = all(create_directory(d) for d in dirs_to_create)
     
     if not dirs_created:
@@ -129,8 +150,8 @@ def main():
     print("Visit: https://platform.deepseek.com/ to get your API key.")
     
     # Check if API key file exists already
-    api_key_file = "api_key.txt"
-    if os.path.exists(api_key_file):
+    api_key_file = root_dir / "api_key.txt"
+    if api_key_file.exists():
         overwrite = input(f"API key file already exists. Overwrite? (y/n): ").lower() == 'y'
         if not overwrite:
             print("Keeping existing API key.")
@@ -157,8 +178,14 @@ def main():
     print("\nSetup Complete")
     print("=" * 60)
     print("You can now run the application using:")
-    print("  - On Linux/macOS: ./scripts/launch_dictionary.sh")
-    print("  - On Windows: scripts\\launch_dictionary.bat")
+    
+    # Show appropriate launch instructions based on OS
+    if platform.system() == "Windows":
+        print("  - On Windows: scripts\\launch_dictionary.bat")
+    else:
+        print("  - On Linux/macOS: ./scripts/launch_dictionary.sh")
+    
+    print("  - From the root directory: ./launchdict.sh (Linux/macOS) or launchdict.bat (Windows)")
     print("=" * 60)
 
 if __name__ == "__main__":

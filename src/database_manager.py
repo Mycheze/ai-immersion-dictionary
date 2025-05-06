@@ -1,22 +1,30 @@
 import sqlite3
 import json
 import os
+from pathlib import Path
 from contextlib import contextmanager
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 
 class DatabaseManager:
     """
     Manages SQLite database operations for the dictionary application
     """
     
-    def __init__(self, db_path: str = "data/dictionary.db"):
+    def __init__(self, db_path: Union[str, Path] = None):
         """Initialize database connection and create tables if needed"""
-        self.db_path = db_path
+        # If no db_path is provided, use default data directory in app root
+        if db_path is None:
+            # Get the application root directory
+            app_root = Path(__file__).parent.parent.absolute()
+            self.db_path = app_root / "data" / "dictionary.db"
+        else:
+            # Convert string path to Path object if needed
+            self.db_path = Path(db_path) if isinstance(db_path, str) else db_path
         
         # Ensure data directory exists
-        data_dir = os.path.dirname(self.db_path)
-        if data_dir and not os.path.exists(data_dir):
-            os.makedirs(data_dir, exist_ok=True)
+        data_dir = self.db_path.parent
+        if not data_dir.exists():
+            data_dir.mkdir(parents=True, exist_ok=True)
             print(f"Created directory: {data_dir}")
             
         self.init_database()
@@ -24,7 +32,9 @@ class DatabaseManager:
     @contextmanager
     def get_connection(self):
         """Context manager for database connections"""
-        conn = sqlite3.connect(self.db_path)
+        # Convert Path to string for sqlite3.connect
+        db_path_str = str(self.db_path)
+        conn = sqlite3.connect(db_path_str)
         conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key constraints
         try:
             yield conn
@@ -440,14 +450,17 @@ class DatabaseManager:
         
         return entry
     
-    def migrate_from_json(self, json_file: str):
+    def migrate_from_json(self, json_file: Union[str, Path]):
         """Migrate existing JSON data to the database"""
         try:
-            if not os.path.exists(json_file):
-                print(f"JSON file {json_file} not found")
+            # Convert to Path object if it's a string
+            path = Path(json_file) if isinstance(json_file, str) else json_file
+            
+            if not path.exists():
+                print(f"JSON file {path} not found")
                 return
             
-            with open(json_file, 'r', encoding='utf-8') as f:
+            with path.open('r', encoding='utf-8') as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -457,7 +470,7 @@ class DatabaseManager:
                         except json.JSONDecodeError:
                             print(f"Skipping invalid JSON line: {line}")
             
-            print(f"Migration from {json_file} completed successfully")
+            print(f"Migration from {path} completed successfully")
             
         except Exception as e:
             print(f"Error during migration: {e}")

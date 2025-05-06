@@ -1,6 +1,8 @@
 import sys
 import re
 import json
+import os
+from pathlib import Path
 from openai import OpenAI
 from database_manager import DatabaseManager
 from user_settings import UserSettings
@@ -13,7 +15,15 @@ class DictionaryEngine:
     
     def __init__(self, db_manager=None, user_settings=None):
         """Initialize the dictionary engine with API key and settings"""
-        self.api_key = self.read_api_key('api_key.txt')
+        # Get the application root directory
+        self.app_root = Path(__file__).parent.parent.absolute()
+        
+        # Define key paths
+        self.api_key_path = self.app_root / 'api_key.txt'
+        self.config_dir = self.app_root / 'config'
+        
+        # Read API key
+        self.api_key = self.read_api_key(self.api_key_path)
         
         # Use provided user settings or create a new one
         self.user_settings = user_settings if user_settings else UserSettings()
@@ -33,22 +43,25 @@ class DictionaryEngine:
         # Cache for validated language names
         self.language_validation_cache = {}
     
-    def read_api_key(self, filename):
+    def read_api_key(self, file_path):
         """Read API key from file"""
         try:
-            with open(filename, 'r') as f:
+            # Convert to Path object if it's a string
+            path = Path(file_path) if isinstance(file_path, str) else file_path
+            
+            with path.open('r') as f:
                 api_key = f.read().strip()
                 if not api_key:
                     raise ValueError("API key file is empty")
                 return api_key
         except FileNotFoundError:
-            print(f"Error: {filename} not found - please run setup.py to configure your API key.")
-            print("You can run: python setup.py")
+            print(f"Error: {path} not found - please run setup.py to configure your API key.")
+            print(f"You can run: python {self.app_root}/setup.py")
             self._show_api_key_error()
             return None
         except Exception as e:
-            print(f"Error reading {filename}: {str(e)}")
-            print("Please run setup.py to reconfigure your API key.")
+            print(f"Error reading {path}: {str(e)}")
+            print(f"Please run setup.py to reconfigure your API key.")
             self._show_api_key_error()
             return None
             
@@ -79,13 +92,23 @@ class DictionaryEngine:
     def read_system_prompt(self, filename):
         """Read system prompt from file"""
         try:
-            with open(filename, 'r') as f:
+            # Handle both string paths and existing Path objects
+            if isinstance(filename, str):
+                # If it's just a relative filename, look in the config directory
+                if not os.path.isabs(filename):
+                    path = self.config_dir / filename
+                else:
+                    path = Path(filename)
+            else:
+                path = filename
+                
+            with path.open('r') as f:
                 return f.read()
         except FileNotFoundError:
-            print(f"Error: {filename} not found - please create this file with your system prompt.")
+            print(f"Error: {path} not found - please create this file with your system prompt.")
             sys.exit(1)
         except Exception as e:
-            print(f"Error reading {filename}: {str(e)}")
+            print(f"Error reading {path}: {str(e)}")
             sys.exit(1)
             
     def process_prompt(self, prompt_content, settings=None, additional_vars=None):
@@ -153,7 +176,7 @@ class DictionaryEngine:
                 return self.get_lemma_with_context(word, sentence_context)
             
             # If not in cache and no context, call the API with standard prompt
-            lemma_prompt = self.read_system_prompt('config/lemma_prompt.txt')
+            lemma_prompt = self.read_system_prompt('lemma_prompt.txt')
             
             lemma_settings = self.settings.copy()
             lemma_settings['TARGET_WORD'] = word
@@ -193,7 +216,7 @@ class DictionaryEngine:
             target_language = self.settings.get('TARGET_LANGUAGE', 'Czech')
             
             # Read context-aware lemma prompt
-            lemma_prompt = self.read_system_prompt('config/lemma_context_prompt.txt')
+            lemma_prompt = self.read_system_prompt('lemma_context_prompt.txt')
             
             lemma_settings = self.settings.copy()
             lemma_settings['TARGET_WORD'] = word
@@ -237,7 +260,7 @@ class DictionaryEngine:
             
             # Otherwise use standard entry creation
             # Read the system prompt
-            raw_prompt = self.read_system_prompt('config/prompt.txt')
+            raw_prompt = self.read_system_prompt('prompt.txt')
             
             # Create settings with language overrides if provided
             entry_settings = self.settings.copy()
@@ -317,7 +340,7 @@ class DictionaryEngine:
         """Create a new dictionary entry with sentence context"""
         try:
             # Read the context-aware system prompt
-            raw_prompt = self.read_system_prompt('config/prompt_with_context.txt')
+            raw_prompt = self.read_system_prompt('prompt_with_context.txt')
             
             # Create settings with language overrides if provided
             entry_settings = self.settings.copy()
@@ -422,7 +445,7 @@ class DictionaryEngine:
                 return self.language_validation_cache[language_name]
             
             # Read the validation prompt template
-            validation_prompt = self.read_system_prompt('config/language_validation_prompt.txt')
+            validation_prompt = self.read_system_prompt('language_validation_prompt.txt')
             
             # Process the prompt with the language name
             processed_prompt = validation_prompt.replace('[INPUT_LANGUAGE]', language_name)

@@ -1,6 +1,8 @@
 #!/bin/bash
-# Path to your virtual environment
-VENV_DIR="/home/bena/Documents/DeepDict/venv"
+# Root launcher script that calls the more comprehensive launch script in scripts directory
 
-# Launch Deep Dict
-$VENV_DIR/bin/python3 "/home/bena/Documents/DeepDict/src/app.py"
+# Get the script's directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Call the main launcher script
+"$SCRIPT_DIR/scripts/launch_dictionary.sh" "$@"

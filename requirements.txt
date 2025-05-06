@@ -1,3 +1,8 @@
 openai==1.76.2
 pyperclip==1.8.2
 requests==2.31.0
+tk==0.1.0  # Tkinter wrapper, Tkinter itself is included with Python
+# For alternative clipboard handling on Linux, install system packages:
+# sudo apt-get install xclip xsel  # Debian/Ubuntu
+# sudo dnf install xclip xsel      # Fedora
+# sudo pacman -S xclip xsel        # Arch Linux
