@@ -33,6 +33,9 @@ class UserSettings:
             'source_language': default_definition_lang,  # Base language of the learner (same as definition language)
             'definition_language': default_definition_lang,  # Language for definitions
             
+            # UI settings
+            'text_scale_factor': 1.0,  # Default scale factor for text (1.0 = 100%)
+            
             # Anki integration settings
             'anki_enabled': False,
             'anki_url': 'http://localhost:8765',

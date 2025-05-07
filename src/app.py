@@ -9,6 +9,7 @@ from user_settings import UserSettings
 from database_manager import DatabaseManager
 from anki_integration import AnkiConnector, AnkiFieldMapper, AnkiExporter
 from anki_config_ui import AnkiConfigDialog
+from settings_dialog import SettingsDialog
 try:
     # On Windows and macOS
     import pyperclip
@@ -85,6 +86,11 @@ class DictionaryApp:
         
         # Update language options to include custom languages
         self.update_language_options()
+        
+        # Apply text scaling if saved in settings
+        settings = self.user_settings.get_settings()
+        text_scale = settings.get('text_scale_factor', 1.0)
+        self.apply_text_scaling(text_scale)
         
         # Load initial data
         self.reload_data()
@@ -432,9 +438,10 @@ class DictionaryApp:
                 example_frame = tk.Frame(self.entry_display)
                 self.entry_display.window_create(tk.END, window=example_frame)
                 
-                # Example text with different style for context examples
+                # Example text with different style for context examples - get scale factor from settings
+                scale_factor = self.user_settings.get_setting('text_scale_factor', 1.0)
                 example_text = tk.Label(example_frame, text=f"   {example['sentence']}", 
-                                      font=("Arial", 12), wraplength=600, justify='left',
+                                      font=("Arial", int(12 * scale_factor)), wraplength=600, justify='left',
                                       background="#f0fff0" if is_context else "white")  # Light green background for context
                 example_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
                 
@@ -757,6 +764,10 @@ class DictionaryApp:
         # Add Anki configuration button
         self.anki_config_btn = ttk.Button(self.top_panel, text="⚙️ Anki Config", command=self.show_anki_config)
         self.anki_config_btn.pack(side=tk.RIGHT, padx=5, pady=5)
+        
+        # Add Settings button
+        self.settings_btn = ttk.Button(self.top_panel, text="⚙️ Settings", command=self.show_settings_dialog)
+        self.settings_btn.pack(side=tk.RIGHT, padx=5, pady=5)
         
         # Create admin buttons (only shown when ALT is pressed)
         self.admin_buttons_frame = tk.Frame(self.top_panel)
@@ -1595,6 +1606,103 @@ class DictionaryApp:
         # Redisplay current entry to update export buttons
         if self.current_entry:
             self.display_entry(self.current_entry)
+            
+    def show_settings_dialog(self):
+        """Show application settings dialog"""
+        dialog = SettingsDialog(self.root, self.user_settings)
+        
+        # Wait for dialog to be closed
+        self.root.wait_window(dialog)
+        
+        # After dialog is closed, apply the text scaling
+        settings = self.user_settings.get_settings()
+        text_scale = settings.get('text_scale_factor', 1.0)
+        
+        # Apply text scaling to the UI
+        self.apply_text_scaling(text_scale)
+        
+        # Show status message
+        self.show_status_message(f"Text scaling set to {text_scale:.2f}x")
+        
+    def apply_text_scaling(self, scale_factor):
+        """Apply text scaling to all UI elements"""
+        # Update font sizes based on the scale factor
+        self.update_tag_fonts(scale_factor)
+        
+        # Update entry display font
+        base_entry_size = 12
+        new_entry_size = int(base_entry_size * scale_factor)
+        self.entry_display.config(font=("Arial", new_entry_size))
+        
+        # Update search elements
+        self.new_word_entry.config(font=("Arial", int(12 * scale_factor)))
+        self.hint_label.config(font=("Arial", int(8 * scale_factor)))
+        
+        # Update toolbar title
+        self.title_label.config(font=("Arial", int(14 * scale_factor), "bold"))
+        
+        # Update headword list
+        self.headword_list.config(font=("Arial", int(10 * scale_factor)))
+        
+        # Update search entry
+        self.search_entry.config(font=("Arial", int(10 * scale_factor)))
+        
+        # Update language filter labels and dropdowns
+        for child in self.language_filter_frame.winfo_children():
+            if isinstance(child, tk.Label):
+                child.config(font=("Arial", int(10 * scale_factor)))
+        
+        # Update target and definition language dropdowns
+        style = ttk.Style()
+        style.configure("TCombobox", font=("Arial", int(10 * scale_factor)))
+        
+        # Update sentence context panel
+        if hasattr(self, 'sentence_text'):
+            self.sentence_text.config(font=("Arial", int(10 * scale_factor)))
+            
+            # Update char count and instructions label
+            for child in self.sentence_frame.winfo_children():
+                if isinstance(child, tk.Frame):
+                    for subchild in child.winfo_children():
+                        if isinstance(subchild, ttk.Label):
+                            subchild.config(font=("Arial", int(8 * scale_factor)))
+                            
+        # Update search bar title and label
+        for child in self.bottom_panel.winfo_children():
+            if isinstance(child, tk.Frame):  # This should be the search_frame
+                for subchild in child.winfo_children():
+                    if isinstance(subchild, tk.Label) and "Add New Word" in subchild["text"]:
+                        subchild.config(font=("Arial", int(12 * scale_factor), "bold"))
+                    elif isinstance(subchild, tk.Frame):  # input_frame or hint_frame
+                        for sub_subchild in subchild.winfo_children():
+                            if isinstance(sub_subchild, tk.Label) and "Enter word" in sub_subchild["text"]:
+                                sub_subchild.config(font=("Arial", int(10 * scale_factor)))
+        
+        # Update example text in entries with the newly scaled fonts
+        if self.current_entry:
+            self.display_entry(self.current_entry)
+        
+    def update_tag_fonts(self, scale_factor):
+        """Update all tag fonts with the new scale factor"""
+        # Calculate new font sizes
+        size_10 = int(10 * scale_factor)
+        size_12 = int(12 * scale_factor)
+        size_16 = int(16 * scale_factor)
+        
+        # Update tag configurations
+        self.entry_display.tag_config("language_header", font=("Arial", size_10), foreground="gray")
+        self.entry_display.tag_config("context_header", font=("Arial", size_10, "bold"), foreground="#008800")
+        self.entry_display.tag_config("headword", font=("Arial", size_16, "bold"))
+        self.entry_display.tag_config("pos", font=("Arial", size_12, "italic"))
+        self.entry_display.tag_config("definition", font=("Arial", size_12, "bold"))
+        self.entry_display.tag_config("grammar", font=("Arial", size_10), foreground="gray")
+        self.entry_display.tag_config("example_label", font=("Arial", size_10, "italic"))
+        self.entry_display.tag_config("context_example_label", font=("Arial", size_10, "italic"), foreground="#008800")
+        self.entry_display.tag_config("example", font=("Arial", size_12))
+        self.entry_display.tag_config("context_example", font=("Arial", size_12), background="#f0fff0")
+        self.entry_display.tag_config("translation", font=("Arial", size_10, "italic"), foreground="blue")
+        self.entry_display.tag_config("status", font=("Arial", size_12), foreground="green")
+        self.entry_display.tag_config("multiword_headword", font=("Arial", size_16, "bold"), foreground="navy")
     
     def export_example_to_anki(self, meaning_index, example_index):
         """Export a specific example to Anki"""

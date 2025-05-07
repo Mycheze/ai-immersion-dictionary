@@ -37,10 +37,10 @@ class AnkiConfigDialog(tk.Toplevel):
         
         # Setup dialog
         self.title("Anki Integration Configuration")
-        self.geometry("800x700")  # Increased size to ensure buttons are visible
+        self.geometry("800x800")  # Increased height to ensure buttons are visible
         self.transient(parent)  # Set to be on top of the main window
         self.grab_set()  # Modal dialog
-        self.minsize(750, 650)  # Set minimum size to ensure buttons are always visible
+        self.minsize(750, 750)  # Set minimum size to ensure buttons are always visible
         
         # Center the dialog on the parent window
         self.update_idletasks()
@@ -379,6 +379,23 @@ class AnkiConfigDialog(tk.Toplevel):
         auto_export = self.settings.get('auto_export', False)
         skip_confirmation = self.settings.get('skip_confirmation', False)
         tags = self.settings.get('tags', [])
+        
+        # Clean up any duplicate tags
+        if isinstance(tags, list):
+            cleaned_tags = []
+            for tag in tags:
+                if tag not in cleaned_tags:
+                    cleaned_tags.append(tag)
+            
+            # Remove language tags that will be added dynamically
+            cleaned_tags = [tag for tag in cleaned_tags 
+                if not tag.startswith("source:") and not tag.startswith("target:")]
+            
+            # Save cleaned tags back to settings if they changed
+            if set(cleaned_tags) != set(tags):
+                self.settings['tags'] = cleaned_tags
+                self.user_settings.update_settings({'tags': cleaned_tags})
+                tags = cleaned_tags
         
         # Set values in UI
         self.url_var.set(anki_url)
@@ -829,6 +846,14 @@ Note: Numbers (0, 1, etc.) refer to array indices (starting at 0 for the first i
         # Get tags
         tags_str = self.tags_var.get().strip()
         tags = [tag.strip() for tag in tags_str.split(',')] if tags_str else []
+        
+        # Remove any empty tags and duplicates
+        tags = [tag for tag in tags if tag]
+        tags = list(dict.fromkeys(tags))  # Remove duplicates while preserving order
+        
+        # Remove language tags that will be added dynamically
+        tags = [tag for tag in tags 
+            if not tag.startswith("source:") and not tag.startswith("target:")]
         
         # Get note type configurations
         note_types_config = self.settings.get('note_types', {})

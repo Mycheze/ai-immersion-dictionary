@@ -383,18 +383,22 @@ class AnkiExporter:
         # Map fields
         fields = self.field_mapper.map_entry_to_fields(entry)
         
-        # Get tags
-        tags = self.settings.get('tags', [])
+        # Get tags from settings, creating a copy to avoid modifying the original
+        tags = list(self.settings.get('tags', []))
         
-        # Add source and target language tags
+        # Add source and target language tags (only if they don't already exist)
         if 'metadata' in entry:
             source_lang = entry['metadata'].get('source_language')
             target_lang = entry['metadata'].get('target_language')
             
-            if source_lang:
-                tags.append(f"source:{source_lang}")
-            if target_lang:
-                tags.append(f"target:{target_lang}")
+            source_tag = f"source:{source_lang}" if source_lang else None
+            target_tag = f"target:{target_lang}" if target_lang else None
+            
+            # Only add tags if they don't already exist
+            if source_tag and source_tag not in tags:
+                tags.append(source_tag)
+            if target_tag and target_tag not in tags:
+                tags.append(target_tag)
                 
         # Add note to Anki
         try:
