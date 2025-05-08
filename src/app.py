@@ -4,12 +4,15 @@ import json
 import os
 import sys
 import time
+import threading
+import uuid
 from dictionary_engine import DictionaryEngine
 from user_settings import UserSettings
 from database_manager import DatabaseManager
 from anki_integration import AnkiConnector, AnkiFieldMapper, AnkiExporter
 from anki_config_ui import AnkiConfigDialog
 from settings_dialog import SettingsDialog
+from request_manager import RequestManager
 try:
     # On Windows and macOS
     import pyperclip
@@ -58,11 +61,26 @@ class DictionaryApp:
         # Initialize dictionary engine with user settings
         self.dictionary_engine = DictionaryEngine(db_manager=self.db_manager, user_settings=self.user_settings)
         
+        # Initialize the request manager for async API calls
+        self.request_manager = RequestManager(self.dictionary_engine)
+        self.request_manager.set_ui_callback(self.update_queue_status)
+        
+        # Queue status update interval (ms)
+        self.queue_update_interval = 250
+        
+        # Dictionary to map request IDs to operations
+        self.pending_requests = {}
+        
         # Load existing dictionary data from database
         self.filtered_data = []
         
         # Store the current entry for delete/regenerate operations
         self.current_entry = None
+        
+        # Track what the user is currently viewing
+        self.viewed_headword = None
+        self.user_selected_entry = False  # Flag to track if user has actively selected an entry
+        self.pending_notifications = []
         
         # Clipboard monitoring state
         self.clipboard_monitoring = False
@@ -94,6 +112,12 @@ class DictionaryApp:
         
         # Load initial data
         self.reload_data()
+        
+        # Update recent lookups list
+        self.update_recent_lookups_list()
+        
+        # Start periodic UI updates for queue status
+        self.root.after(self.queue_update_interval, self.periodic_ui_update)
     
     def setup_gui(self):
         # Create the main frame structure
@@ -101,6 +125,9 @@ class DictionaryApp:
         
         # Create the menu and toolbar
         self.create_toolbar()
+        
+        # Create the notification area
+        self.create_notification_area()
         
         # Create the search and entry panels
         self.create_search_panel()
@@ -117,6 +144,31 @@ class DictionaryApp:
         
         # Make sure the bottom panel is visible
         self.bottom_panel.update()
+        
+        # Add space bar keyboard shortcut for search box focus
+        # Bind it to all relevant widgets that might have focus
+        def focus_search_box(event):
+            # Skip if the event is already in a text input widget
+            if isinstance(event.widget, tk.Entry) or isinstance(event.widget, tk.Text):
+                return
+            
+            # Clear and focus on the search box
+            self.new_word_entry.delete(0, tk.END)
+            self.new_word_entry.focus_set()
+            return "break"  # Prevent the space from being inserted
+            
+        
+        # Bind to the main window and all major frames
+        self.root.bind("<space>", focus_search_box)
+        self.main_container.bind("<space>", focus_search_box)
+        self.top_panel.bind("<space>", focus_search_box)
+        self.notification_panel.bind("<space>", focus_search_box)
+        self.middle_frame.bind("<space>", focus_search_box)
+        self.left_panel.bind("<space>", focus_search_box)
+        self.right_panel.bind("<space>", focus_search_box)
+        self.bottom_panel.bind("<space>", focus_search_box)
+        self.entry_display.bind("<space>", focus_search_box)
+        self.headword_list.bind("<space>", focus_search_box)
 
 #    def create_status_bar(self):
 #        """Create a status bar to show current language settings"""
@@ -138,6 +190,41 @@ class DictionaryApp:
 #            
 #            status_text = f"Learning: {target_lang} | Definitions: {definition_lang}"
 #            self.status_label.config(text=status_text)
+
+    def create_notification_area(self):
+        """Create a dedicated area for displaying notifications"""
+        # Create a frame for notification content
+        self.notification_content_frame = tk.Frame(self.notification_panel, bg="#f0f0f0")
+        self.notification_content_frame.pack(fill=tk.X, expand=True, padx=10, pady=5)
+        
+        # Create the notification label
+        self.notification_label = tk.Label(
+            self.notification_content_frame,
+            text="",
+            font=("Arial", 10, "bold"),
+            bg="#f0f0f0",
+            fg="#008800",  # Green color for notifications
+            anchor=tk.W
+        )
+        self.notification_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # Create a "View" button for completed entries
+        self.view_notification_btn = ttk.Button(
+            self.notification_content_frame,
+            text="View",
+            command=self.show_notification_entry,
+            width=5
+        )
+        self.view_notification_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Create a "Close" button to dismiss notifications
+        self.close_notification_btn = ttk.Button(
+            self.notification_content_frame,
+            text="✕",
+            command=self.clear_notifications,
+            width=2
+        )
+        self.close_notification_btn.pack(side=tk.LEFT, padx=5)
     
     def create_frames(self):
         # Main container frame to manage layout
@@ -147,6 +234,12 @@ class DictionaryApp:
         # Top panel for toolbar
         self.top_panel = tk.Frame(self.main_container)
         self.top_panel.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        
+        # Notification panel for displaying system notifications
+        self.notification_panel = tk.Frame(self.main_container, bg="#f0f0f0", bd=1, relief=tk.GROOVE)
+        self.notification_panel.pack(side=tk.TOP, fill=tk.X, padx=5, pady=0)
+        # Initially hide the notification panel until there's a notification to show
+        self.notification_panel.pack_forget()
         
         # Middle frame to contain the left and right panels
         self.middle_frame = tk.Frame(self.main_container)
@@ -174,8 +267,19 @@ class DictionaryApp:
         self.search_entry = ttk.Entry(self.left_panel, textvariable=self.search_var)
         self.search_entry.pack(fill=tk.X, padx=5, pady=5)
         self.search_entry.bind("<KeyRelease>", self.filter_headwords)
+        # Add standard text editing shortcuts
+        self.add_standard_text_bindings(self.search_entry)
         
-        # Headword list
+        # Recent lookups section
+        self.recent_lookups_frame = ttk.LabelFrame(self.left_panel, text="Recent Lookups")
+        self.recent_lookups_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        
+        # Recent lookups list
+        self.recent_lookups_list = tk.Listbox(self.recent_lookups_frame, height=5)
+        self.recent_lookups_list.pack(expand=False, fill=tk.X, padx=5, pady=5)
+        self.recent_lookups_list.bind("<<ListboxSelect>>", self.show_recent_lookup)
+        
+        # Headword list (main dictionary list)
         self.headword_list = tk.Listbox(self.left_panel)
         self.headword_list.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
         self.headword_list.bind("<<ListboxSelect>>", self.show_entry)
@@ -225,6 +329,12 @@ class DictionaryApp:
         self.entry_display.pack(expand=True, fill=tk.BOTH)
         self.entry_display.config(state=tk.DISABLED)
         
+        # Add standard text editing shortcuts for selection and copying
+        self.add_standard_text_bindings(self.entry_display)
+        
+        # Make sure we can select text even in disabled state
+        self.entry_display.bind("<1>", lambda event: self.entry_display.focus_set())
+        
         # Action buttons frame (at the bottom right)
         self.action_buttons_frame = tk.Frame(self.entry_container, bg="#f0f0f0")
         self.action_buttons_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
@@ -268,6 +378,54 @@ class DictionaryApp:
         search_frame = tk.Frame(self.bottom_panel, bd=2, relief=tk.GROOVE)
         search_frame.pack(fill=tk.X, padx=10, pady=10)
         
+        # Status bar for API queue
+        self.queue_status_frame = tk.Frame(search_frame, bg="#f0f0f0")
+        self.queue_status_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
+        
+        # Queue status indicators
+        self.queue_status_label = tk.Label(
+            self.queue_status_frame, 
+            text="API Queue: Idle", 
+            font=("Arial", 9),
+            bg="#f0f0f0",
+            fg="#555555"
+        )
+        self.queue_status_label.pack(side=tk.LEFT, padx=5)
+        
+        # Progress/status indicators
+        self.queue_active_label = tk.Label(
+            self.queue_status_frame, 
+            text="", 
+            font=("Arial", 9),
+            bg="#f0f0f0",
+            fg="#555555"
+        )
+        self.queue_active_label.pack(side=tk.LEFT, padx=5)
+        
+        # Notification functionality has been moved to the dedicated notification area
+        
+        # Progress bar for active operations
+        self.queue_progress = ttk.Progressbar(
+            self.queue_status_frame,
+            orient=tk.HORIZONTAL,
+            length=200,
+            mode='indeterminate'
+        )
+        self.queue_progress.pack(side=tk.LEFT, padx=5)
+        
+        # Cancel button for clearing the queue
+        self.cancel_queue_btn = ttk.Button(
+            self.queue_status_frame,
+            text="Cancel All",
+            command=self.cancel_all_requests,
+            width=10
+        )
+        self.cancel_queue_btn.pack(side=tk.RIGHT, padx=5)
+        
+        # Initially hide the cancel button and progress bar
+        self.queue_progress.pack_forget()
+        self.cancel_queue_btn.pack_forget()
+        
         # Title for the search area to make it more visible
         search_title = tk.Label(search_frame, text="Add New Word to Dictionary", font=("Arial", 12, "bold"))
         search_title.pack(pady=(5, 10))
@@ -304,6 +462,9 @@ class DictionaryApp:
         
         # Bind Enter key to search
         self.new_word_entry.bind("<Return>", lambda event: self.search_new_word())
+        
+        # Add standard text editing shortcuts
+        self.add_standard_text_bindings(self.new_word_entry)
     
     def apply_saved_settings(self):
         """Apply saved user settings for language preferences"""
@@ -440,10 +601,37 @@ class DictionaryApp:
                 
                 # Example text with different style for context examples - get scale factor from settings
                 scale_factor = self.user_settings.get_setting('text_scale_factor', 1.0)
-                example_text = tk.Label(example_frame, text=f"   {example['sentence']}", 
-                                      font=("Arial", int(12 * scale_factor)), wraplength=600, justify='left',
-                                      background="#f0fff0" if is_context else "white")  # Light green background for context
-                example_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                
+                # Use Text widget instead of Label to allow text selection
+                example_text = tk.Text(example_frame, 
+                                     font=("Arial", int(12 * scale_factor)),
+                                     wrap=tk.WORD,
+                                     height=1,  # Initial height, will be adjusted
+                                     width=40,
+                                     background="#f0fff0" if is_context else "white",  # Light green background for context
+                                     relief=tk.FLAT,  # Remove the default border
+                                     padx=5,
+                                     pady=5)
+                
+                # Insert the example sentence
+                example_text.insert(tk.END, f"   {example['sentence']}")
+                
+                # Calculate required height based on content
+                # Get the number of lines in the widget
+                line_count = int(example_text.index('end-1c').split('.')[0])
+                # Set height based on content, with a minimum of 1 line
+                example_text.config(height=max(1, min(line_count, 5)))
+                
+                # Make the text read-only but still selectable
+                example_text.config(state=tk.DISABLED)
+                
+                # Allow the user to select text even in disabled state
+                example_text.bind("<1>", lambda event: example_text.focus_set())
+                
+                # Add standard text editing shortcuts for selection and copying
+                self.add_standard_text_bindings(example_text)
+                
+                example_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
                 
                 # Export button (📤 icon)
                 if self.anki_connector:
@@ -470,11 +658,22 @@ class DictionaryApp:
         self.entry_display.config(state=tk.DISABLED)
     
     def show_status_message(self, message):
-        """Show a status message in the entry display"""
-        self.entry_display.config(state=tk.NORMAL)
-        self.entry_display.delete(1.0, tk.END)
-        self.entry_display.insert(tk.END, message, "status")
-        self.entry_display.config(state=tk.DISABLED)
+        """Show a status message in a dedicated section, not overwriting the entry display"""
+        # Create status bar if it doesn't exist
+        if not hasattr(self, 'status_bar'):
+            self.status_bar = tk.Frame(self.right_panel, height=25, bg="#f0f0f0")
+            self.status_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=2)
+            
+            self.status_label = tk.Label(self.status_bar, text="", 
+                                        font=("Arial", 10), fg="green", bg="#f0f0f0",
+                                        anchor=tk.W)
+            self.status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Update the status label
+        self.status_label.config(text=message)
+        
+        # Schedule message clear after 10 seconds
+        self.root.after(10000, lambda: self.status_label.config(text=""))
     
     def update_headword_list(self):
         """Update the listbox with current filtered headwords"""
@@ -488,6 +687,7 @@ class DictionaryApp:
             self.update_language_options()
             self.apply_language_filters()
             self.update_headword_list()
+            self.update_recent_lookups_list()  # Update recent lookups UI
             self.clear_entry_display()
             print("Data reloaded successfully")
         except Exception as e:
@@ -592,6 +792,11 @@ class DictionaryApp:
         # Get the selected word from the listbox
         selected_word = self.headword_list.get(selection[0])
         
+        # Track what the user is currently viewing
+        self.viewed_headword = selected_word.lower()
+        # Set flag indicating user has actively selected an entry
+        self.user_selected_entry = True
+        
         # Find the exact entry that matches current filter settings
         target_lang = self.target_lang_var.get()
         definition_lang = self.definition_lang_var.get()
@@ -610,6 +815,7 @@ class DictionaryApp:
             self.current_entry = entry
             # Display the entry
             self.display_entry(entry)
+            # Removed add_to_recent_lookups call - we only want to add when searching new words
         else:
             # If not found in database, fall back to filtered data
             for e in self.filtered_data:
@@ -619,15 +825,19 @@ class DictionaryApp:
                         entry = e
                         self.current_entry = entry
                         self.display_entry(entry)
+                        # Removed add_to_recent_lookups call - we only want to add when searching new words
                         break
     
     def search_new_word(self):
-        """Handle searching for a new word"""
+        """Handle searching for a new word asynchronously"""
         word = self.new_word_var.get().strip()
         if not word:
             return
         
-        # Clear the search field
+        # DEBUG PRINTS - will help diagnose issues    
+        print(f"SEARCH: Starting search for word: '{word}'")
+        
+        # Clear the search field but don't disable it - users can still enter words
         self.new_word_entry.delete(0, tk.END)
         
         # Check if we have active sentence context
@@ -637,23 +847,22 @@ class DictionaryApp:
             context_status = "with context"
             # Update indicator to show active context
             self.set_context_indicator_color("blue")
+            print(f"SEARCH: Using sentence context: '{sentence_context}'")
         else:
             context_status = ""
         
         # Show status with context indication
-        status_msg = f"Processing: '{word}'{' ' + context_status if context_status else ''}..."
+        status_msg = f"Queued: '{word}'{' ' + context_status if context_status else ''}..."
         self.show_status_message(status_msg)
-        self.root.update()
         
         # Get current language settings
         target_lang = self.target_lang_var.get() if self.target_lang_var.get() != "All" else None
         source_lang = self.source_lang_var.get()
         definition_lang = self.definition_lang_var.get()
         
-        # Step 1: Get lemma (using context if available)
-        lemma = self.dictionary_engine.get_lemma(word, sentence_context)
+        print(f"SEARCH: Languages - Target: {target_lang}, Source: {source_lang}, Definition: {definition_lang}")
         
-        # Step 2: Check if word/lemma exists (prioritize exact match first)
+        # First, check if the word already exists - this is synchronous
         existing_entry = self.db_manager.get_entry_by_headword(
             word, 
             source_lang=source_lang,
@@ -662,18 +871,45 @@ class DictionaryApp:
         )
         
         if existing_entry:
-            # Update current_entry directly to ensure it's in sync
-            self.current_entry = existing_entry
-            self.display_entry(existing_entry)
-            self.select_and_show_headword(word.lower())
-            
-            # Clear the sentence context window after finding the existing entry
-            if sentence_context:
-                self.clear_sentence_context()
-                
+            print(f"SEARCH: Found existing entry for exact word '{word}'")
+            # Use the direct display method for consistency
+            self._direct_display_entry(existing_entry, word, sentence_context)
+            print(f"SEARCH: Displayed existing entry for '{word}'")
             return
         
-        # Step 3: Check if lemma exists
+        # Create a copy of the word and context for use in callbacks
+        word_copy = word
+        context_copy = sentence_context
+        
+        # Step 2: Get lemma asynchronously (using context if available)
+        params = {
+            'word': word,
+            'sentence_context': sentence_context
+        }
+        
+        self.show_status_message(f"Getting lemma for '{word}'...")
+        print(f"SEARCH: Getting lemma for '{word}'...")
+        
+        # Create a request for lemma
+        request_id = self.request_manager.add_request(
+            'lemma',
+            params,
+            success_callback=lambda lemma: self._on_lemma_received(
+                lemma, word_copy, target_lang, source_lang, definition_lang, context_copy
+            ),
+            error_callback=lambda error: self._on_lemma_error(error, word_copy)
+        )
+        
+        # Store the request ID for potential cancellation
+        request_key = f"lemma_{word}"
+        self.pending_requests[request_key] = request_id
+        print(f"SEARCH: Added lemma request with ID {request_id}")
+    
+    def _on_lemma_received(self, lemma, original_word, target_lang, source_lang, definition_lang, sentence_context):
+        """Handle received lemma from async request"""
+        print(f"SEARCH: Received lemma: '{lemma}' for word '{original_word}'")
+        
+        # Check if lemma exists
         existing_entry = self.db_manager.get_entry_by_headword(
             lemma, 
             source_lang=source_lang,
@@ -682,62 +918,268 @@ class DictionaryApp:
         )
         
         if existing_entry:
-            # Update current_entry directly to ensure it's in sync
-            self.current_entry = existing_entry
-            self.display_entry(existing_entry)
-            self.select_and_show_headword(lemma.lower())
-            
-            # Clear the sentence context window after finding the existing lemma
-            if sentence_context:
-                self.clear_sentence_context()
+            print(f"SEARCH: Found existing entry for lemma '{lemma}'")
+            # Process on main thread to ensure UI updates properly
+            self.root.after(0, lambda: self._direct_display_entry(
+                existing_entry, lemma, sentence_context
+            ))
         else:
             # Create new entry with context if available
-            new_entry = self.dictionary_engine.create_new_entry(
-                lemma, 
-                target_lang, 
-                source_lang, 
-                sentence_context
+            print(f"SEARCH: Creating new entry for lemma '{lemma}'")
+            self.show_status_message(f"Creating new entry for '{lemma}'...")
+            
+            params = {
+                'word': lemma,
+                'target_lang': target_lang,
+                'source_lang': source_lang,
+                'sentence_context': sentence_context
+            }
+            
+            # Create a request for new entry
+            request_id = self.request_manager.add_request(
+                'entry',
+                params,
+                success_callback=lambda entry: self._on_entry_created(
+                    entry, lemma, original_word, sentence_context
+                ),
+                error_callback=lambda error: self._on_entry_error(error, lemma, sentence_context)
             )
             
-            if new_entry:
-                entry_id = self.db_manager.add_entry(new_entry)
-                if entry_id:
-                    # First update current_entry to ensure it's set correctly before reloading data
-                    self.current_entry = new_entry
-                    
-                    # If we had sentence context, save it in the database
-                    if sentence_context:
-                        self.db_manager.save_sentence_context(entry_id, sentence_context, word)
-                        # Clear the sentence context window after creating card successfully
-                        self.clear_sentence_context()
-                    
-                    self.reload_data()
-                    self.display_entry(new_entry)
-                    self.select_and_show_headword(lemma.lower())
-                else:
-                    self.show_status_message(f"Error: Failed to save entry for '{lemma}'")
-                    
-                    # Set context indicator back to red if context was active but failed
-                    if sentence_context:
-                        self.set_context_indicator_color("red")
-            else:
-                self.show_status_message(f"Error: Failed to create entry for '{lemma}'")
+            # Store the request ID for potential cancellation
+            request_key = f"entry_{lemma}"
+            self.pending_requests[request_key] = request_id
+            print(f"SEARCH: Added entry creation request with ID {request_id}")
+            
+    def _direct_display_entry(self, entry, lemma, sentence_context=None):
+        """Direct display method that bypasses all the notification and select logic"""
+        print(f"SEARCH: Directly displaying entry for '{lemma}'")
+        
+        # Make sure any existing notifications are cleared
+        self.clear_notifications()
+        
+        # Update the current entry
+        self.current_entry = entry
+        
+        # Show status in the dedicated status bar
+        self.show_status_message(f"Found existing entry for '{lemma}'")
+        
+        # First make sure the entry is selected in the list - BEFORE displaying content
+        try:
+            # Force select it in the list
+            self.select_and_show_headword(lemma.lower())
+            print(f"SEARCH: Selected '{lemma}' in headword list")
+        except Exception as e:
+            print(f"SEARCH: Error selecting in list: {e}")
+        
+        # Clear and enable the display
+        self.entry_display.config(state=tk.NORMAL)
+        self.entry_display.delete(1.0, tk.END)
+        
+        # Display the entry directly - this should be the LAST operation
+        self.display_entry(entry)
+        
+        # Make sure the display gets focus
+        self.entry_display.focus_set()
+        
+        # Update and ensure the UI refreshes
+        self.root.update_idletasks()
+        
+        # Add to recent lookups
+        self.add_to_recent_lookups(entry)
+        
+        # Clear any sentence context
+        if sentence_context:
+            self.clear_sentence_context()
+            
+        print(f"SEARCH: Successfully displayed entry for '{lemma}'")
+    
+    def _process_existing_entry(self, entry, lemma, sentence_context):
+        """Process existing entry on main thread"""
+        # Update current_entry directly to ensure it's in sync
+        self.current_entry = entry
+        
+        # Make sure any existing notifications are cleared
+        self.clear_notifications()
+        
+        # Update queue status to show success
+        self.queue_status_label.config(
+            text=f"Found existing entry for '{lemma}'", 
+            fg="#0066cc"  # Blue color for info
+        )
+        
+        # Display the entry in the main area
+        self.display_entry(entry)
+        
+        # Add to recent lookups
+        self.add_to_recent_lookups(entry)
+        
+        # Select the word in the list after a short delay to ensure UI responsiveness
+        self.root.after(100, lambda: self.select_and_show_headword(lemma.lower()))
+        
+        # Clear the sentence context window after finding the existing lemma
+        if sentence_context:
+            self.clear_sentence_context()
+    
+    def _on_entry_created(self, new_entry, lemma, original_word, sentence_context):
+        """Handle created entry from async request"""
+        print(f"SEARCH: Entry creation callback for '{lemma}'")
+        if new_entry:
+            # Process on main thread
+            self.root.after(0, lambda: self._direct_display_new_entry(
+                new_entry, lemma, original_word, sentence_context
+            ))
+        else:
+            print(f"SEARCH: Failed to create entry for '{lemma}'")
+            self.root.after(0, lambda: self._on_entry_error(
+                "Failed to create entry", lemma, sentence_context
+            ))
+    
+    def _direct_display_new_entry(self, new_entry, lemma, original_word, sentence_context):
+        """Direct display method for new entries that bypasses all the notification logic"""
+        print(f"SEARCH: Saving and displaying new entry for '{lemma}'")
+        entry_id = self.db_manager.add_entry(new_entry)
+        
+        if entry_id:
+            print(f"SEARCH: Successfully saved entry with ID {entry_id}")
+            
+            # If we had sentence context, save it in the database
+            if sentence_context:
+                self.db_manager.save_sentence_context(entry_id, sentence_context, original_word)
+                # Clear the sentence context window after creating card successfully
+                self.clear_sentence_context()
+            
+            # Make sure any existing notifications are cleared
+            self.clear_notifications()
+            
+            # Update the current entry
+            self.current_entry = new_entry
+            
+            # First show success message in the status bar (not in the entry display)
+            self.show_status_message(f"Added new entry for '{lemma}'")
+            
+            # *** RELOAD DATA FIRST - This ensures the entry is in the list ***
+            try:
+                self.reload_data()
+                print(f"SEARCH: Data reloaded for '{lemma}'")
+            except Exception as e:
+                print(f"SEARCH: Error reloading data: {e}")
+            
+            # Force select the entry in the list - BEFORE displaying
+            try:
+                self.select_and_show_headword(lemma.lower())
+                print(f"SEARCH: Selected '{lemma}' in headword list")
+            except Exception as e:
+                print(f"SEARCH: Error selecting in list: {e}")
                 
-                # Set context indicator back to red if context was active but failed
-                if sentence_context:
-                    self.set_context_indicator_color("red")
+            # Now clear and enable the display after list is updated
+            self.entry_display.config(state=tk.NORMAL)
+            self.entry_display.delete(1.0, tk.END)
+            
+            # Display the entry directly - this should be the LAST operation
+            self.display_entry(new_entry)
+            print(f"SEARCH: Entry displayed for '{lemma}'")
+            
+            # Make sure the display gets focus
+            self.entry_display.focus_set()
+            
+            # Update and ensure the UI refreshes
+            self.root.update_idletasks()
+            
+            # Add to recent lookups
+            self.add_to_recent_lookups(new_entry)
+        else:
+            print(f"SEARCH: Failed to save entry to database for '{lemma}'")
+            self.show_status_message(f"Error: Failed to save entry for '{lemma}'")
+            
+            # Set context indicator back to red if context was active but failed
+            if sentence_context:
+                self.set_context_indicator_color("red")
+    
+    def _on_lemma_error(self, error, word, sentence_context=None):
+        """Handle lemma error on main thread"""
+        self.root.after(0, lambda: self.show_status_message(
+            f"Error getting lemma for '{word}': {error}"
+        ))
+        
+        # Set context indicator back to red if context was active but failed
+        if sentence_context:
+            self.set_context_indicator_color("red")
+    
+    def _on_entry_error(self, error, lemma, sentence_context=None):
+        """Handle entry creation error on main thread"""
+        self.root.after(0, lambda: self.show_status_message(
+            f"Error creating entry for '{lemma}': {error}"
+        ))
+        
+        # Set context indicator back to red if context was active but failed
+        if sentence_context:
+            self.set_context_indicator_color("red")
 
     def select_and_show_headword(self, headword: str):
-        """Helper method to find and select a headword in the listbox and update current_entry"""
+        """Helper method to find and select a headword in the listbox without triggering display"""
+        # Temporarily unbind the selection event to prevent auto-display
+        self.headword_list.unbind("<<ListboxSelect>>")
+        
         for i in range(self.headword_list.size()):
             if self.headword_list.get(i).lower() == headword:
                 self.headword_list.selection_clear(0, tk.END)
                 self.headword_list.selection_set(i)
                 self.headword_list.see(i)
-                
-                # We don't call force_show_entry here to avoid potential recursive loops
-                # Instead we ensure current_entry is already updated by the calling functions
                 break
+                
+        # Re-bind the selection event after making the selection
+        self.headword_list.bind("<<ListboxSelect>>", self.show_entry)
+    
+    def show_recent_lookup(self, event):
+        """Display the dictionary entry from the recent lookups list"""
+        # Prevent interference with the main headword list
+        self.headword_list.selection_clear(0, tk.END)
+        
+        selection = self.recent_lookups_list.curselection()
+        if not selection:
+            return
+        
+        # Get the selected index
+        idx = selection[0]
+        
+        # Get the lookup data from user settings
+        recent_lookups = self.user_settings.get_recent_lookups()
+        if not recent_lookups or idx >= len(recent_lookups):
+            return
+            
+        # Get the lookup entry
+        lookup = recent_lookups[idx]
+        headword = lookup.get('headword')
+        target_lang = lookup.get('target_language')
+        definition_lang = lookup.get('definition_language')
+        source_lang = definition_lang  # Source language equals definition language
+        
+        # Track what the user is currently viewing
+        self.viewed_headword = headword.lower()
+        # Set flag indicating user has actively selected an entry
+        self.user_selected_entry = True
+        
+        # Get the entry from the database
+        entry = self.db_manager.get_entry_by_headword(
+            headword,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            definition_lang=definition_lang
+        )
+        
+        if entry:
+            # Store the current entry reference
+            self.current_entry = entry
+            # Display the entry
+            self.display_entry(entry)
+            
+            # Clear selection after displaying the entry
+            self.recent_lookups_list.selection_clear(0, tk.END)
+        else:
+            self.show_status_message(f"Could not find entry for '{headword}'")
+            
+        # Keep focus on the recent lookup list for better UX
+        self.recent_lookups_list.focus_set()
     
     def migrate_json_data(self):
         """Migrate data from JSON file to database"""
@@ -1224,6 +1666,8 @@ class DictionaryApp:
         self.sentence_text.bind("<KeyRelease>", self.update_char_count)
         self.sentence_text.bind("<Double-Button-1>", self.on_word_double_click)
         self.sentence_text.bind("<<Selection>>", self.on_text_selection)
+        # Add standard text editing shortcuts
+        self.add_standard_text_bindings(self.sentence_text)
         
         # Initialize instance variables
         self.current_sentence_context = None
@@ -1500,19 +1944,13 @@ class DictionaryApp:
             self.show_status_message(f"Failed to delete entry '{headword}'.")
     
     def regenerate_current_entry(self):
-        """Regenerate the currently displayed entry"""
+        """Regenerate the currently displayed entry asynchronously"""
         if not self.current_entry:
             self.show_status_message("No entry selected to regenerate.")
             return
             
         headword = self.current_entry["headword"]
         metadata = self.current_entry["metadata"]
-        
-        # Reduce debug output 
-        # print(f"Attempting to regenerate entry: '{headword}'")
-        # print(f"Source language: {metadata['source_language']}")
-        # print(f"Target language: {metadata['target_language']}")
-        # print(f"Definition language: {metadata['definition_language']}")
         
         # Ask for confirmation
         confirm = tk.messagebox.askyesno(
@@ -1524,61 +1962,88 @@ class DictionaryApp:
             return
             
         # Show status
-        self.show_status_message(f"Regenerating: '{headword}'...")
-        self.root.update()
-        
-        # Force the UI to update before we start the regeneration process
-        self.root.after(100)
+        self.show_status_message(f"Queued: Regenerating '{headword}'...")
         
         # Add random seed to ensure variation
-        import time
         import random
         random.seed(time.time())
         variation_seed = random.randint(1, 10000)
         
-        # Regenerate the entry with added variation instructions and random seed
-        new_entry = self.dictionary_engine.regenerate_entry(
-            headword,
-            target_lang=metadata["target_language"],
-            source_lang=metadata["source_language"],
-            definition_lang=metadata["definition_language"],
-            variation_seed=variation_seed
+        # Prepare parameters for async request
+        params = {
+            'headword': headword,
+            'target_lang': metadata["target_language"],
+            'source_lang': metadata["source_language"],
+            'definition_lang': metadata["definition_language"],
+            'variation_seed': variation_seed
+        }
+        
+        # Add regeneration request to queue
+        request_id = self.request_manager.add_request(
+            'regenerate',
+            params,
+            success_callback=lambda entry: self._on_regenerate_success(entry, headword),
+            error_callback=lambda error: self._on_regenerate_error(error, headword)
         )
         
+        # Store the request ID
+        request_key = f"regenerate_{headword}"
+        self.pending_requests[request_key] = request_id
+    
+    def _on_regenerate_success(self, new_entry, headword):
+        """Handle successful entry regeneration"""
         if new_entry:
-            # Update the current entry
-            self.current_entry = new_entry
-            
-            # Display the new entry
-            self.display_entry(new_entry)
-            
-            # Force redraw of the UI
-            self.root.update_idletasks()
-            
-            # Reload data from the database
-            self.reload_data()
-            
-            # Update the headword list
-            self.update_headword_list()
-            
-            # Find and select the headword in the list
-            for i in range(self.headword_list.size()):
-                if self.headword_list.get(i).lower() == headword.lower():
-                    self.headword_list.selection_clear(0, tk.END)
-                    self.headword_list.selection_set(i)
-                    self.headword_list.see(i)
-                    
-                    # Use event to trigger show_entry
-                    event = tk.Event()
-                    event.widget = self.headword_list
-                    self.show_entry(event)
-                    break
-            
-            # Show success message
-            self.show_status_message(f"Entry '{headword}' regenerated successfully.")
+            # Process on main thread
+            self.root.after(0, lambda: self._process_regenerated_entry(new_entry, headword))
         else:
-            self.show_status_message(f"Failed to regenerate entry '{headword}'.")
+            self.root.after(0, lambda: self.show_status_message(
+                f"Failed to regenerate entry '{headword}'."
+            ))
             
+    def _process_regenerated_entry(self, new_entry, headword):
+        """Process regenerated entry on main thread"""
+        print(f"SEARCH: Processing regenerated entry for '{headword}'")
+        
+        # Update current entry
+        self.current_entry = new_entry
+        
+        # Show status in the status bar
+        self.show_status_message(f"Regenerated entry for '{headword}'")
+        
+        # Reload data FIRST to ensure the entry is in the list
+        try:
+            self.reload_data()
+            print(f"SEARCH: Data reloaded for regenerated '{headword}'")
+        except Exception as e:
+            print(f"SEARCH: Error reloading data: {e}")
+        
+        # Force select the entry in the list BEFORE displaying content
+        try:
+            self.select_and_show_headword(headword.lower())
+            print(f"SEARCH: Selected regenerated '{headword}' in headword list")
+        except Exception as e:
+            print(f"SEARCH: Error selecting in list: {e}")
+        
+        # Clear and enable the display
+        self.entry_display.config(state=tk.NORMAL)
+        self.entry_display.delete(1.0, tk.END)
+        
+        # Display the entry as the LAST operation
+        self.display_entry(new_entry)
+        print(f"SEARCH: Displayed regenerated entry for '{headword}'")
+        
+        # Make sure the display gets focus
+        self.entry_display.focus_set()
+        
+        # Update and ensure the UI refreshes
+        self.root.update_idletasks()
+    
+    def _on_regenerate_error(self, error, headword):
+        """Handle entry regeneration error"""
+        self.root.after(0, lambda: self.show_status_message(
+            f"Error regenerating entry '{headword}': {error}"
+        ))
+    
     def show_anki_config(self):
         """Show Anki configuration dialog"""
         dialog = AnkiConfigDialog(self.root, self.user_settings)
@@ -1644,6 +2109,9 @@ class DictionaryApp:
         # Update headword list
         self.headword_list.config(font=("Arial", int(10 * scale_factor)))
         
+        # Update recent lookups list
+        self.recent_lookups_list.config(font=("Arial", int(10 * scale_factor)))
+        
         # Update search entry
         self.search_entry.config(font=("Arial", int(10 * scale_factor)))
         
@@ -1703,7 +2171,156 @@ class DictionaryApp:
         self.entry_display.tag_config("translation", font=("Arial", size_10, "italic"), foreground="blue")
         self.entry_display.tag_config("status", font=("Arial", size_12), foreground="green")
         self.entry_display.tag_config("multiword_headword", font=("Arial", size_16, "bold"), foreground="navy")
+        
+    def update_recent_lookups_list(self):
+        """Update the recent lookups listbox with the most recent lookups"""
+        # Clear the current content
+        self.recent_lookups_list.delete(0, tk.END)
+        
+        # Get recent lookups from user settings
+        recent_lookups = self.user_settings.get_recent_lookups()
+        
+        if not recent_lookups:
+            self.recent_lookups_list.insert(tk.END, "No recent lookups")
+            return
+            
+        # Add each recent lookup to the listbox
+        for lookup in recent_lookups:
+            headword = lookup.get('headword', '')
+            
+            # Display only the headword without language information
+            self.recent_lookups_list.insert(tk.END, headword)
+            
+        # Apply same font as main headword list
+        font = self.headword_list.cget("font")
+        self.recent_lookups_list.config(font=font)
+            
+    def add_to_recent_lookups(self, entry):
+        """Add an entry to the recent lookups list"""
+        if not entry:
+            return
+            
+        # Get required fields from the entry
+        headword = entry.get('headword')
+        metadata = entry.get('metadata', {})
+        target_lang = metadata.get('target_language')
+        definition_lang = metadata.get('definition_language')
+        
+        if not (headword and target_lang and definition_lang):
+            return
+            
+        # Add to recent lookups in user settings
+        self.user_settings.add_recent_lookup(headword, target_lang, definition_lang)
+        
+        # Update the UI
+        self.update_recent_lookups_list()
     
+    def update_queue_status(self):
+        """Update the UI based on the current queue status"""
+        # This method is called by the RequestManager when queue status changes
+        # Ensure UI updates happen on the main thread
+        self.root.after(0, self._update_queue_status_ui)
+    
+    def _update_queue_status_ui(self):
+        """Update UI elements based on queue status (called on main thread)"""
+        pending_count = self.request_manager.get_pending_count()
+        active_count = self.request_manager.get_active_count()
+        
+        # Update status label
+        if pending_count == 0 and active_count == 0:
+            self.queue_status_label.config(text="API Queue: Idle", fg="#555555")
+            self.queue_active_label.config(text="")
+            self.queue_progress.pack_forget()
+            self.cancel_queue_btn.pack_forget()
+        else:
+            total = pending_count + active_count
+            self.queue_status_label.config(
+                text=f"API Queue: {total} operation{'s' if total > 1 else ''}", 
+                fg="#0066cc"
+            )
+            self.queue_active_label.config(
+                text=f"Active: {active_count} | Pending: {pending_count}"
+            )
+            
+            # Show progress bar if operations are in progress
+            if active_count > 0:
+                if not self.queue_progress.winfo_ismapped():
+                    self.queue_progress.pack(side=tk.LEFT, padx=5)
+                    # Start the indeterminate progress animation
+                    self.queue_progress.start(15)  # Speed in ms
+            else:
+                self.queue_progress.pack_forget()
+                self.queue_progress.stop()
+            
+            # Show cancel button if there are operations
+            if not self.cancel_queue_btn.winfo_ismapped():
+                self.cancel_queue_btn.pack(side=tk.RIGHT, padx=5)
+    
+    def periodic_ui_update(self):
+        """Periodically update the UI status"""
+        # Update the UI with current queue status
+        self._update_queue_status_ui()
+        
+        # Schedule the next update
+        self.root.after(self.queue_update_interval, self.periodic_ui_update)
+    
+    def cancel_all_requests(self):
+        """Cancel all pending API requests"""
+        count = self.request_manager.cancel_all_requests()
+        self.show_status_message(f"Cancelled {count} API operation{'s' if count != 1 else ''}")
+        # Re-enable the search button
+        self.search_btn.config(state=tk.NORMAL)
+        # Clear any notifications
+        self.clear_notifications()
+        
+    def show_notification(self, message, headword, entry):
+        """Show a notification for a completed request"""
+        # Store the notification data for the view button
+        self.latest_notification = {
+            'headword': headword,
+            'entry': entry
+        }
+        
+        # Update notification label
+        self.notification_label.config(text=message)
+        
+        # Show notification panel if it's not already visible
+        if not self.notification_panel.winfo_ismapped():
+            self.notification_panel.pack(side=tk.TOP, fill=tk.X, padx=5, pady=0, after=self.top_panel)
+            
+        # No longer automatically showing the entry - the user can click "View" if they want to
+            
+    def clear_notifications(self):
+        """Clear all notifications"""
+        self.notification_label.config(text="")
+        self.notification_panel.pack_forget()
+        self.latest_notification = None
+        
+    def show_notification_entry(self):
+        """Show the entry from the latest notification"""
+        if not hasattr(self, 'latest_notification') or not self.latest_notification:
+            return
+            
+        headword = self.latest_notification['headword']
+        entry = self.latest_notification['entry']
+        
+        # Update viewed headword
+        self.viewed_headword = headword.lower()
+        # Set user selection flag to false to ensure display isn't skipped
+        self.user_selected_entry = False
+        
+        # Update current entry
+        self.current_entry = entry
+        
+        # First display the entry to ensure its content is visible
+        self.display_entry(entry)
+        
+        # Then select it in the list (without triggering another display operation)
+        self.select_and_show_headword(headword.lower())
+        
+        # Clear the notification
+        self.clear_notifications()
+        
     def export_example_to_anki(self, meaning_index, example_index):
         """Export a specific example to Anki"""
         if not self.current_entry or not self.anki_connector:
@@ -1753,6 +2370,247 @@ class DictionaryApp:
                 self.show_status_message("Export failed: No note ID returned")
         except Exception as e:
             self.show_status_message(f"Export failed: {str(e)}")
+            
+    def delete_previous_word(self, event):
+        """Handle Ctrl+Backspace to delete the previous word in an entry widget"""
+        entry_widget = event.widget
+        
+        # For Entry widgets, get() returns the entire contents without indices
+        full_text = entry_widget.get()
+        
+        # Get the current cursor position
+        cursor_pos = entry_widget.index(tk.INSERT)
+        
+        if cursor_pos == 0:  # If cursor is at the beginning of the entry, do nothing
+            return "break"
+            
+        # Get the text from beginning to cursor
+        text_before_cursor = full_text[:cursor_pos]
+        
+        # Find the start of the previous word
+        word_start = cursor_pos
+        
+        # Skip any spaces directly to the left of the cursor
+        for i in range(cursor_pos - 1, -1, -1):
+            if text_before_cursor[i].isspace():
+                word_start = i
+            else:
+                break
+                
+        # Now find the actual beginning of the word
+        for i in range(word_start - 1, -1, -1):
+            if text_before_cursor[i].isspace():
+                word_start = i + 1
+                break
+            if i == 0:
+                word_start = 0
+                break
+        
+        # Delete from the start of the word to cursor position
+        entry_widget.delete(word_start, cursor_pos)
+        
+        return "break"  # Prevents default Backspace behavior
+        
+    def add_standard_text_bindings(self, widget):
+        """
+        Add standard text editing keyboard shortcuts to an Entry or Text widget
+        This makes text editing behavior more consistent with standard editors
+        """
+        # Select all text (Ctrl+A)
+        if isinstance(widget, tk.Entry):
+            def select_all_entry(event):
+                event.widget.select_range(0, tk.END)
+                event.widget.icursor(tk.END)  # Set cursor position to the end
+                return "break"
+            widget.bind("<Control-a>", select_all_entry)
+            widget.bind("<Control-A>", select_all_entry)
+            
+        elif isinstance(widget, tk.Text):
+            def select_all_text(event):
+                event.widget.tag_add(tk.SEL, "1.0", tk.END)
+                event.widget.mark_set(tk.INSERT, tk.END)
+                return "break"
+            widget.bind("<Control-a>", select_all_text)
+            widget.bind("<Control-A>", select_all_text)
+        
+        # Copy selected text (Ctrl+C)
+        def copy_selection(event):
+            try:
+                if isinstance(event.widget, tk.Entry):
+                    if event.widget.selection_present():
+                        selected_text = event.widget.selection_get()
+                        event.widget.clipboard_clear()
+                        event.widget.clipboard_append(selected_text)
+                elif isinstance(event.widget, tk.Text):
+                    if event.widget.tag_ranges(tk.SEL):
+                        selected_text = event.widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+                        event.widget.clipboard_clear()
+                        event.widget.clipboard_append(selected_text)
+            except Exception as e:
+                print(f"Error copying text: {e}")
+            return "break"
+        
+        widget.bind("<Control-c>", copy_selection)
+        widget.bind("<Control-C>", copy_selection)
+        
+        # Delete previous word (Ctrl+Backspace)
+        if isinstance(widget, tk.Entry):
+            widget.bind("<Control-BackSpace>", self.delete_previous_word)
+        elif isinstance(widget, tk.Text):
+            widget.bind("<Control-BackSpace>", self.delete_previous_word_text)
+        
+        # Cut selected text (Ctrl+X)
+        def cut_selection(event):
+            try:
+                if isinstance(event.widget, tk.Entry):
+                    if event.widget.selection_present():
+                        selected_text = event.widget.selection_get()
+                        event.widget.clipboard_clear()
+                        event.widget.clipboard_append(selected_text)
+                        event.widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                elif isinstance(event.widget, tk.Text):
+                    if event.widget.tag_ranges(tk.SEL):
+                        selected_text = event.widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+                        event.widget.clipboard_clear()
+                        event.widget.clipboard_append(selected_text)
+                        # Make sure text is editable before trying to cut
+                        state = event.widget.cget("state")
+                        if state == tk.DISABLED:
+                            event.widget.config(state=tk.NORMAL)
+                            event.widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                            event.widget.config(state=tk.DISABLED)
+                        else:
+                            event.widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+            except Exception as e:
+                print(f"Error cutting text: {e}")
+            return "break"
+            
+        # Only bind cut to editable widgets
+        if isinstance(widget, tk.Entry) or (isinstance(widget, tk.Text) and widget.cget("state") != tk.DISABLED):
+            widget.bind("<Control-x>", cut_selection)
+            widget.bind("<Control-X>", cut_selection)
+        
+        # Paste text (Ctrl+V)
+        def paste_text(event):
+            try:
+                clipboard_text = event.widget.clipboard_get()
+                if not clipboard_text:
+                    return "break"
+                    
+                if isinstance(event.widget, tk.Entry):
+                    if event.widget.selection_present():
+                        event.widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                    event.widget.insert(tk.INSERT, clipboard_text)
+                elif isinstance(event.widget, tk.Text):
+                    if event.widget.tag_ranges(tk.SEL):
+                        # Make sure text is editable before trying to paste
+                        state = event.widget.cget("state")
+                        if state == tk.DISABLED:
+                            event.widget.config(state=tk.NORMAL)
+                            event.widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                            event.widget.insert(tk.INSERT, clipboard_text)
+                            event.widget.config(state=tk.DISABLED)
+                        else:
+                            event.widget.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                            event.widget.insert(tk.INSERT, clipboard_text)
+                    else:
+                        # Make sure text is editable before trying to paste
+                        state = event.widget.cget("state")
+                        if state == tk.DISABLED:
+                            event.widget.config(state=tk.NORMAL)
+                            event.widget.insert(tk.INSERT, clipboard_text)
+                            event.widget.config(state=tk.DISABLED)
+                        else:
+                            event.widget.insert(tk.INSERT, clipboard_text)
+            except Exception as e:
+                print(f"Error pasting text: {e}")
+            return "break"
+            
+        # Only bind paste to editable widgets
+        if isinstance(widget, tk.Entry) or (isinstance(widget, tk.Text) and widget.cget("state") != tk.DISABLED):
+            widget.bind("<Control-v>", paste_text)
+            widget.bind("<Control-V>", paste_text)
+            
+    def delete_previous_word_text(self, event):
+        """Handle Ctrl+Backspace to delete the previous word in a Text widget"""
+        text_widget = event.widget
+        
+        # Check if widget is editable
+        is_disabled = text_widget.cget("state") == tk.DISABLED
+        if is_disabled:
+            # If we can't edit, do nothing
+            return "break"
+            
+        # Get the current cursor position (format is "line.column")
+        cursor_pos = text_widget.index(tk.INSERT)
+        
+        # If at beginning of text, do nothing
+        if cursor_pos == "1.0":
+            return "break"
+            
+        # Split line and column
+        line, col = map(int, cursor_pos.split('.'))
+        
+        if col == 0:
+            # If at beginning of a line (but not the first line), move to end of previous line
+            if line > 1:
+                prev_line = line - 1
+                prev_line_end = text_widget.index(f"{prev_line}.end")
+                # Extract end column of previous line
+                _, prev_col = map(int, prev_line_end.split('.'))
+                
+                # Get the text from previous line
+                prev_line_text = text_widget.get(f"{prev_line}.0", prev_line_end)
+                
+                # Find the start of the last word in the previous line
+                word_start = prev_col
+                
+                # Skip any spaces at the end
+                for i in range(prev_col - 1, -1, -1):
+                    if prev_line_text[i].isspace():
+                        word_start = i
+                    else:
+                        break
+                
+                # Now find the beginning of the word
+                for i in range(word_start - 1, -1, -1):
+                    if prev_line_text[i].isspace():
+                        word_start = i + 1
+                        break
+                    if i == 0:
+                        word_start = 0
+                        break
+                
+                # Delete from word start to the current cursor position
+                text_widget.delete(f"{prev_line}.{word_start}", cursor_pos)
+        else:
+            # We're in the middle of a line
+            # Get text from beginning of current line to cursor
+            text_before_cursor = text_widget.get(f"{line}.0", cursor_pos)
+            
+            # Find the start of the previous word
+            word_start = col
+            
+            # Skip any spaces directly to the left of the cursor
+            for i in range(col - 1, -1, -1):
+                if text_before_cursor[i].isspace():
+                    word_start = i
+                else:
+                    break
+                
+            # Now find the actual beginning of the word
+            for i in range(word_start - 1, -1, -1):
+                if text_before_cursor[i].isspace():
+                    word_start = i + 1
+                    break
+                if i == 0:
+                    word_start = 0
+                    break
+            
+            # Delete from word start to the current cursor position
+            text_widget.delete(f"{line}.{word_start}", cursor_pos)
+        
+        return "break"  # Prevents default Backspace behavior
 
     def show_anki_export_dialog(self, focused_entry):
         """Show dialog to preview and confirm Anki export"""
@@ -1843,4 +2701,13 @@ class DictionaryApp:
 if __name__ == "__main__":
     root = tk.Tk()
     app = DictionaryApp(root)
+    
+    # Handle window close event to clean up resources
+    def on_closing():
+        if hasattr(app, 'request_manager'):
+            app.request_manager.shutdown()
+        root.destroy()
+    
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    
     root.mainloop()

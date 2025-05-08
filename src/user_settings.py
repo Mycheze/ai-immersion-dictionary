@@ -35,6 +35,7 @@ class UserSettings:
             
             # UI settings
             'text_scale_factor': 1.0,  # Default scale factor for text (1.0 = 100%)
+            'recent_lookups': [],  # List of 5 most recent lookups
             
             # Anki integration settings
             'anki_enabled': False,
@@ -109,3 +110,37 @@ class UserSettings:
         replacements['DEFINITION_LANGUAGE'] = self.settings.get('definition_language', 'English')
         
         return replacements
+    
+    def add_recent_lookup(self, headword, target_lang, definition_lang):
+        """Add a word to the recent lookups list, maintaining max 5 items"""
+        # Get current recent lookups
+        recent_lookups = self.settings.get('recent_lookups', [])
+        
+        # Create lookup entry with headword and language information
+        lookup_entry = {
+            'headword': headword,
+            'target_language': target_lang,
+            'definition_language': definition_lang
+        }
+        
+        # Remove this entry if it already exists in the list (to avoid duplicates)
+        recent_lookups = [entry for entry in recent_lookups 
+                         if not (entry.get('headword') == headword and 
+                                entry.get('target_language') == target_lang and
+                                entry.get('definition_language') == definition_lang)]
+        
+        # Add the new entry at the beginning of the list
+        recent_lookups.insert(0, lookup_entry)
+        
+        # Keep only the 5 most recent lookups
+        recent_lookups = recent_lookups[:5]
+        
+        # Update settings and save to file
+        self.settings['recent_lookups'] = recent_lookups
+        self.save_settings()
+        
+        return recent_lookups
+        
+    def get_recent_lookups(self):
+        """Get the list of recent lookups"""
+        return self.settings.get('recent_lookups', [])
