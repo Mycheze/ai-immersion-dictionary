@@ -2,9 +2,16 @@
 
 An AI-powered dictionary application to help language learners with personalized entries, lemmatization, and multiple language support.
 
+Please note that the code in this program is almost entirely generated with Claude Code and other Claude models. I have very (very) rudimentary programming skills, but working more as a project manager role and prompting Claude through feature creation allowed me to build the tool I had in my head.
+
+If you're worried about using vibe-coded tools for any reasons, consider this your warning. But I've done my best to avoid any potential security risks. The most sensitive piece of information which this app uses is a DeepSeek API key. Clipboard monitoring could also display sensitive information, but unless it is manually searched, that will not be saved or sent anywhere.
+
+Apart from the API calls (which obviously need an internet connect and sends the data to a third party), I have attempted to keep everything else local to your device.
+
 ## Features
 
 - AI-powered dictionary entry creation using DeepSeek API
+- Thanks to low API costs, heavy use of the program costs ~$0.03/day
 - Multi-language support with customizable language preferences
 - Intelligent lemmatization with caching
 - Sentence context analysis for more accurate definitions
@@ -20,6 +27,7 @@ An AI-powered dictionary application to help language learners with personalized
 - SQLite for database
 - DeepSeek API for AI processing
 - JSON file handling for configuration
+- Claude Code and other Claude models for coding
 
 ## Installation
 
@@ -147,8 +155,3 @@ If you encounter database errors:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- DeepSeek for providing the API
-- Contributors to the project

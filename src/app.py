@@ -1,3 +1,14 @@
+# Import text patches first (must be before tkinter is used anywhere)
+try:
+    from utils.text_patches import *  # This enhances Text widgets for better wrapping
+except ImportError:
+    # Create utils directory if it doesn't exist
+    import os
+    if not os.path.exists('utils'):
+        os.makedirs('utils')
+    # Skip if not available, app will still work
+    pass
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import json
@@ -50,7 +61,8 @@ class DictionaryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("AI-Powered Immersion Dictionary")
-        self.root.geometry("1200x1000")
+        self.root.geometry("1400x900")  # Adjusted window height to be more compact
+        self.root.minsize(1200, 800)     # Set minimum window size to avoid text truncation
         
         # Initialize database manager
         self.db_manager = DatabaseManager()
@@ -245,21 +257,24 @@ class DictionaryApp:
         self.middle_frame = tk.Frame(self.main_container)
         self.middle_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Left panel for search and headword list
+        # Left panel for search and headword list - with fixed width
         self.left_panel = tk.Frame(self.middle_frame, width=200, bg="#f0f0f0")
         self.left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         
-        # Right panel for displaying entries
+        # Prevent the left panel from resizing
+        self.left_panel.pack_propagate(False)
+        
+        # Right panel for displaying entries - maximum available space
         self.right_panel = tk.Frame(self.middle_frame)
-        self.right_panel.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=5, pady=5)
+        self.right_panel.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=3, pady=3)
         
-        # Bottom panel for search bar
+        # Bottom panel for search bar - reduced padding
         self.bottom_panel = tk.Frame(self.main_container)
-        self.bottom_panel.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=10)
+        self.bottom_panel.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
         
-        # Sentence context panel (between entry display and bottom search bar)
+        # Sentence context panel (between entry display and bottom search bar) - more compact
         self.sentence_panel = tk.Frame(self.main_container)
-        self.sentence_panel.pack(side=tk.BOTTOM, fill=tk.X, before=self.bottom_panel, padx=5, pady=5)
+        self.sentence_panel.pack(side=tk.BOTTOM, fill=tk.X, before=self.bottom_panel, padx=5, pady=2)
     
     def create_search_panel(self):
         # Search box
@@ -322,9 +337,18 @@ class DictionaryApp:
         self.entry_container = tk.Frame(self.right_panel)
         self.entry_container.pack(expand=True, fill=tk.BOTH)
         
-        # Entry display
+        # Entry display - refined settings for better UI and readability
         self.entry_display = scrolledtext.ScrolledText(
-            self.entry_container, wrap=tk.WORD, font=("Arial", 12), padx=10, pady=10
+            self.entry_container, 
+            wrap=tk.WORD,  # Ensure word wrapping (not character wrapping)
+            font=("Arial", 11),  # Slightly smaller base font for better proportions
+            padx=15,  # Reduced horizontal padding for more compact display
+            pady=10,  # Reduced vertical padding for better spacing
+            width=72,  # Width optimized for typical window size
+            height=20,  # Reduced height to show more UI elements
+            background="#fcfcfc",  # Very light gray background - easier on the eyes than pure white
+            bd=0,  # No border 
+            highlightthickness=0  # No focus rectangle
         )
         self.entry_display.pack(expand=True, fill=tk.BOTH)
         self.entry_display.config(state=tk.DISABLED)
@@ -360,23 +384,67 @@ class DictionaryApp:
         # Configure tags for formatting
         self.entry_display.tag_config("language_header", font=("Arial", 10), foreground="gray")
         self.entry_display.tag_config("context_header", font=("Arial", 10, "bold"), foreground="#008800")  # Green for context
-        self.entry_display.tag_config("headword", font=("Arial", 16, "bold"))
-        self.entry_display.tag_config("pos", font=("Arial", 12, "italic"))
-        self.entry_display.tag_config("definition", font=("Arial", 12, "bold"))
+        
+        # Add divider for visual separation
+        self.entry_display.tag_config("divider", foreground="#cccccc")
+        
+        # Improved headword styling for better visual impact
+        self.entry_display.tag_config("headword", font=("Arial", 18, "bold"), foreground="#333333")
+        self.entry_display.tag_config("pos", font=("Arial", 12, "italic"), foreground="#555555")
+        
+        # Create dedicated tags for definition number and content for better styling
+        self.entry_display.tag_config("definition_number", 
+            font=("Arial", 12, "bold"),
+            foreground="#0066cc"  # Blue for definition numbers - looks more professional
+        )
+        
+        # Content tag has specialized margins for proper wrapping
+        self.entry_display.tag_config("definition_content", 
+            font=("Arial", 12, "bold"),  # Bold font for better emphasis and readability
+            lmargin1=40,  # Left margin for first line
+            lmargin2=40,  # Left margin for wrapped lines
+            rmargin=20,   # Right margin
+            wrap="word"   # Ensure word wrapping for this tag
+        )
+        
         self.entry_display.tag_config("grammar", font=("Arial", 10), foreground="gray")
-        self.entry_display.tag_config("example_label", font=("Arial", 10, "italic"))
-        self.entry_display.tag_config("context_example_label", font=("Arial", 10, "italic"), foreground="#008800")  # Green for context examples
-        self.entry_display.tag_config("example", font=("Arial", 12))
-        self.entry_display.tag_config("context_example", font=("Arial", 12), background="#f0fff0")  # Light green background for context examples
-        self.entry_display.tag_config("translation", font=("Arial", 10, "italic"), foreground="blue")
+        self.entry_display.tag_config("example_label", font=("Arial", 11, "italic", "bold"))
+        self.entry_display.tag_config("context_example_label", font=("Arial", 11, "italic", "bold"), foreground="#008800")  # Green for context examples
+        
+        # Add a bullet tag for better formatting
+        self.entry_display.tag_config("example_bullet", font=("Arial", 10), foreground="#666666")
+        
+        # Improve example styling
+        self.entry_display.tag_config("example", 
+            font=("Arial", 11),
+            lmargin1=60,  # Indentation for first line
+            lmargin2=60,  # Indentation for wrapped lines
+            wrap="word"   # Ensure word wrapping
+        )
+        
+        # Context examples have a distinct styling
+        self.entry_display.tag_config("context_example", 
+            font=("Arial", 11),
+            background="#f0fff0",  # Light green background 
+            lmargin1=60,  # Indentation for first line
+            lmargin2=60,  # Indentation for wrapped lines
+            wrap="word"   # Ensure word wrapping
+        )
+        self.entry_display.tag_config("translation_indent", font=("Arial", 10))
+        self.entry_display.tag_config("translation", 
+            font=("Arial", 10, "italic"), 
+            foreground="#666666",  # Softer color for better contrast
+            lmargin1=70,           # Maintain indentation
+            lmargin2=70
+        )
         self.entry_display.tag_config("status", font=("Arial", 12), foreground="green")
-        self.entry_display.tag_config("multiword_headword", font=("Arial", 16, "bold"), foreground="navy")
+        self.entry_display.tag_config("multiword_headword", font=("Arial", 18, "bold"), foreground="#0066aa")
     
     def create_search_bar(self):
         # Bottom search bar for new entries
         # Add a visible border to make the search bar stand out
         search_frame = tk.Frame(self.bottom_panel, bd=2, relief=tk.GROOVE)
-        search_frame.pack(fill=tk.X, padx=10, pady=10)
+        search_frame.pack(fill=tk.X, padx=10, pady=5)
         
         # Status bar for API queue
         self.queue_status_frame = tk.Frame(search_frame, bg="#f0f0f0")
@@ -427,12 +495,12 @@ class DictionaryApp:
         self.cancel_queue_btn.pack_forget()
         
         # Title for the search area to make it more visible
-        search_title = tk.Label(search_frame, text="Add New Word to Dictionary", font=("Arial", 12, "bold"))
-        search_title.pack(pady=(5, 10))
+        search_title = tk.Label(search_frame, text="Add New Word to Dictionary", font=("Arial", 11, "bold"))
+        search_title.pack(pady=(3, 5))
         
         # Input area with clear label
         input_frame = tk.Frame(search_frame)
-        input_frame.pack(fill=tk.X, padx=20, pady=5)
+        input_frame.pack(fill=tk.X, padx=20, pady=3)
         
         tk.Label(input_frame, text="Enter word:", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         
@@ -455,7 +523,7 @@ class DictionaryApp:
         
         # Add a hint about current language settings
         hint_frame = tk.Frame(search_frame)
-        hint_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+        hint_frame.pack(fill=tk.X, padx=20, pady=(0, 3))
         
         self.hint_label = tk.Label(hint_frame, text="Using your selected language preferences", font=("Arial", 8), fg="gray")
         self.hint_label.pack(side=tk.LEFT)
@@ -560,8 +628,13 @@ class DictionaryApp:
             f"{metadata['source_language']} → {metadata['target_language']} (Definitions in {metadata['definition_language']}){context_badge}\n\n", 
             "language_header" if not has_context else "context_header")
         
-        # Highlight multi-word headwords with a special tag
+        # Improved display for headword with better spacing and visual hierarchy
         headword = entry['headword']
+        
+        # Create a divider line above the headword for visual separation
+        self.entry_display.insert(tk.END, "─" * 50 + "\n", "divider")
+        
+        # Highlight multi-word headwords with a special tag
         if ' ' in headword or '-' in headword:
             self.entry_display.insert(tk.END, f"{headword}\n", "multiword_headword")
         else:
@@ -573,7 +646,19 @@ class DictionaryApp:
         
         # Display each meaning
         for i, meaning in enumerate(entry["meanings"], 1):
-            self.entry_display.insert(tk.END, f"{i}. {meaning['definition']}\n", "definition")
+            # Display definition with improved formatting for better readability
+            # Start with the definition number
+            self.entry_display.insert(tk.END, f"{i}. ", "definition_number")
+            
+            # Get the definition text
+            definition_text = meaning['definition']
+            
+            # Process long definitions for better display
+            # Add the definition text directly to main text widget with proper formatting
+            self.entry_display.insert(tk.END, definition_text, "definition_content")
+            
+            # Add minimal spacing after the definition
+            self.entry_display.insert(tk.END, "\n")
             
             # Display grammar info if available
             grammar_info = []
@@ -582,7 +667,10 @@ class DictionaryApp:
                     grammar_info.append(f"{k}: {v}")
             
             if grammar_info:
-                self.entry_display.insert(tk.END, "   " + ", ".join(grammar_info) + "\n", "grammar")
+                # Display grammar info with better formatting
+                grammar_text = ", ".join(grammar_info)
+                self.entry_display.insert(tk.END, "   • " + grammar_text + "\n", "grammar")
+                # No extra space after grammar info
             
             # Display examples with export buttons
             for j, example in enumerate(meaning.get('examples', [])):
@@ -591,63 +679,45 @@ class DictionaryApp:
                 
                 # Use different styling for context examples
                 if is_context:
-                    self.entry_display.insert(tk.END, f"\n   Context Example:\n", "context_example_label")
+                    self.entry_display.insert(tk.END, f"   Context Example:\n", "context_example_label")
                 else:
-                    self.entry_display.insert(tk.END, f"\n   Example:\n", "example_label")
+                    self.entry_display.insert(tk.END, f"   Example:\n", "example_label")
                 
-                # Create a frame for example and export button
-                example_frame = tk.Frame(self.entry_display)
-                self.entry_display.window_create(tk.END, window=example_frame)
+                # Create a better-looking example display
+                # Add a clean indent and bullet before the example
+                self.entry_display.insert(tk.END, "      • ", "example_bullet")
                 
-                # Example text with different style for context examples - get scale factor from settings
-                scale_factor = self.user_settings.get_setting('text_scale_factor', 1.0)
+                # Apply different tag based on example type
+                example_tag = "context_example" if is_context else "example"
                 
-                # Use Text widget instead of Label to allow text selection
-                example_text = tk.Text(example_frame, 
-                                     font=("Arial", int(12 * scale_factor)),
-                                     wrap=tk.WORD,
-                                     height=1,  # Initial height, will be adjusted
-                                     width=40,
-                                     background="#f0fff0" if is_context else "white",  # Light green background for context
-                                     relief=tk.FLAT,  # Remove the default border
-                                     padx=5,
-                                     pady=5)
+                # Insert the example sentence directly with proper formatting
+                self.entry_display.insert(tk.END, f"{example['sentence']}\n", example_tag)
                 
-                # Insert the example sentence
-                example_text.insert(tk.END, f"   {example['sentence']}")
-                
-                # Calculate required height based on content
-                # Get the number of lines in the widget
-                line_count = int(example_text.index('end-1c').split('.')[0])
-                # Set height based on content, with a minimum of 1 line
-                example_text.config(height=max(1, min(line_count, 5)))
-                
-                # Make the text read-only but still selectable
-                example_text.config(state=tk.DISABLED)
-                
-                # Allow the user to select text even in disabled state
-                example_text.bind("<1>", lambda event: example_text.focus_set())
-                
-                # Add standard text editing shortcuts for selection and copying
-                self.add_standard_text_bindings(example_text)
-                
-                example_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-                
-                # Export button (📤 icon)
+                # Export button - use a cleaner inline approach
                 if self.anki_connector:
+                    # Create a frame just for the export button
+                    export_frame = tk.Frame(self.entry_display, background=self.entry_display.cget("background"))
+                    
+                    # Create a small export icon button
                     export_btn = ttk.Button(
-                        example_frame, 
-                        text="📤", 
-                        width=3,
+                        export_frame, 
+                        text="📥", 
+                        width=2,
                         command=lambda m=i-1, e=j: self.export_example_to_anki(m, e)
                     )
-                    export_btn.pack(side=tk.RIGHT, padx=5)
-                
-                self.entry_display.insert(tk.END, "\n")
+                    export_btn.pack(side=tk.RIGHT, padx=2, pady=1)
+                    
+                    # Insert the button frame with proper indentation
+                    self.entry_display.insert(tk.END, "         ")
+                    self.entry_display.window_create(tk.END, window=export_frame)
+                    self.entry_display.insert(tk.END, "\n")
                 
                 # Translation (if available)
                 if example.get("translation"):
-                    self.entry_display.insert(tk.END, f"   {example['translation']}\n\n", "translation")
+                    # Better formatting for translations
+                    self.entry_display.insert(tk.END, "         ", "translation_indent")
+                    self.entry_display.insert(tk.END, f"{example['translation']}", "translation")
+                    self.entry_display.insert(tk.END, "\n")
         
         self.entry_display.config(state=tk.DISABLED)
     
@@ -702,11 +772,7 @@ class DictionaryApp:
         custom_languages = set(self.load_custom_languages())
         removed_languages = set(self.load_removed_languages())
         
-        # Reduce excessive logging - comment out debug prints
-        # Debug info can be re-enabled for troubleshooting if needed
-        # print(f"Languages in database: {db_languages}")
-        # print(f"Custom languages: {custom_languages}")
-        # print(f"Removed languages: {removed_languages}")
+        # Debug info removed for production
         
         # Combine all languages and remove the ones marked as removed
         all_languages = db_languages.union(custom_languages) - removed_languages
@@ -741,8 +807,7 @@ class DictionaryApp:
         target_languages = ["All"] + sorted(filtered_languages)
         definition_languages = sorted(filtered_languages)
         
-        # Reduce excessive logging
-        # print(f"Final languages shown: {filtered_languages}")
+        # Debug info removed for production
         
         self.target_lang_dropdown["values"] = target_languages
         self.definition_lang_dropdown["values"] = definition_languages
@@ -1624,7 +1689,7 @@ class DictionaryApp:
         """Create a panel for sentence context input"""
         # Create labeled frame with a border
         self.sentence_frame = ttk.LabelFrame(self.sentence_panel, text="Sentence Context")
-        self.sentence_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.sentence_frame.pack(fill=tk.X, padx=5, pady=2)
         
         # Top bar with label and character counter
         top_bar = tk.Frame(self.sentence_frame)
@@ -1638,8 +1703,8 @@ class DictionaryApp:
         text_frame = tk.Frame(self.sentence_frame)
         text_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=3)
         
-        # Create text widget for sentence input with scrollbar
-        self.sentence_text = tk.Text(text_frame, height=2, wrap=tk.WORD)
+        # Create text widget for sentence input with scrollbar - reduced height
+        self.sentence_text = tk.Text(text_frame, height=1, wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(text_frame, command=self.sentence_text.yview)
         self.sentence_text.config(yscrollcommand=scrollbar.set)
         
@@ -2163,6 +2228,7 @@ class DictionaryApp:
         self.entry_display.tag_config("headword", font=("Arial", size_16, "bold"))
         self.entry_display.tag_config("pos", font=("Arial", size_12, "italic"))
         self.entry_display.tag_config("definition", font=("Arial", size_12, "bold"))
+        self.entry_display.tag_config("definition_content", font=("Arial", size_12, "bold"))
         self.entry_display.tag_config("grammar", font=("Arial", size_10), foreground="gray")
         self.entry_display.tag_config("example_label", font=("Arial", size_10, "italic"))
         self.entry_display.tag_config("context_example_label", font=("Arial", size_10, "italic"), foreground="#008800")
@@ -2415,7 +2481,19 @@ class DictionaryApp:
         """
         Add standard text editing keyboard shortcuts to an Entry or Text widget
         This makes text editing behavior more consistent with standard editors
+        
+        Also enhances text widgets to ensure they properly handle long text with wrapping
         """
+        # For Text widgets, ensure they're configured for optimal text display
+        if isinstance(widget, tk.Text):
+            # Force word wrapping mode for all Text widgets
+            widget.config(wrap=tk.WORD)
+            
+            # Set text widget to expand if needed
+            widget.config(width=70)  # Wide enough for most content
+            
+            # Ensure proper spacing
+            widget.config(padx=10, pady=10)
         # Select all text (Ctrl+A)
         if isinstance(widget, tk.Entry):
             def select_all_entry(event):
@@ -2697,6 +2775,64 @@ class DictionaryApp:
         cancel_btn = ttk.Button(button_frame, text="Cancel", command=dialog.destroy)
         cancel_btn.pack(side=tk.RIGHT, padx=5)
 
+# Helper function to enhance text wrapping for long sentences
+def enhance_tkinter_text_wrapping():
+    """
+    Monkey patch tkinter Text widget for better typography and long text display.
+    This function completely enhances all Text widgets in the application for
+    better readability, proper wrapping, and improved visual appearance.
+    """
+    # Store original Text.__init__
+    original_text_init = tk.Text.__init__
+    
+    # Create enhanced init function with better typography defaults
+    def enhanced_text_init(self, master=None, **kw):
+        # Force word wrapping for all text widgets
+        kw['wrap'] = 'word'
+        
+        # Set improved defaults for text display
+        if 'width' not in kw:
+            kw['width'] = 72  # Wider default width for better line lengths
+        if 'padx' not in kw:
+            kw['padx'] = 15   # Reduced horizontal padding
+        if 'pady' not in kw:
+            kw['pady'] = 10   # Reduced vertical padding
+        if 'background' not in kw and 'bg' not in kw:
+            kw['background'] = '#fcfcfc'  # Soft background color - easier on eyes
+        if 'font' not in kw:
+            kw['font'] = ('Arial', 11)  # Better default font size
+            
+        # Better borders by default
+        if 'bd' not in kw and 'borderwidth' not in kw:
+            kw['bd'] = 0  # No border by default
+        if 'highlightthickness' not in kw:
+            kw['highlightthickness'] = 0  # No focus rectangle
+        
+        # Call original init
+        original_text_init(self, master, **kw)
+        
+        # Add minimal spacing configuration to handle long text
+        self.configure(spacing1=1)  # Minimal space above paragraph
+        self.configure(spacing2=0)  # No extra space between wrapped lines (cleaner look)
+        self.configure(spacing3=2)  # Minimal space below paragraph
+        
+        # Add standard tag configurations for proper text display
+        # These tags can be used in any Text widget and will have consistent styling
+        try:
+            # Basic text formatting tags
+            self.tag_configure("heading", font=("Arial", 16, "bold"), foreground="#333333")
+            self.tag_configure("body", lmargin1=20, lmargin2=20, rmargin=20, wrap="word")
+            self.tag_configure("indented", lmargin1=40, lmargin2=40, rmargin=20, wrap="word")
+        except Exception:
+            # Silently ignore tag configuration errors - widget might not support it
+            pass
+    
+    # Replace the original init
+    tk.Text.__init__ = enhanced_text_init
+
+# Apply the enhancement
+enhance_tkinter_text_wrapping()
+
 # Run the application
 if __name__ == "__main__":
     root = tk.Tk()
@@ -2704,8 +2840,9 @@ if __name__ == "__main__":
     
     # Handle window close event to clean up resources
     def on_closing():
+        # Set maximum thread join timeout to 0.5 seconds to prevent closing lag
         if hasattr(app, 'request_manager'):
-            app.request_manager.shutdown()
+            app.request_manager.shutdown(timeout=0.5)
         root.destroy()
     
     root.protocol("WM_DELETE_WINDOW", on_closing)
